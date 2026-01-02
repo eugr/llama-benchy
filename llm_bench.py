@@ -169,6 +169,7 @@ async def main():
                         e2e_ttft = 0
                         token_count = 0
                         first_token_time = 0
+                        prompt_usage_tokens = 0
                         
                         try:
                             payload = {
@@ -176,6 +177,7 @@ async def main():
                                 "messages": messages,
                                 "max_tokens": tg,
                                 "stream": True,
+                                "stream_options": {"include_usage": True},
                                 # "temperature": 0,
                                 # "seed": 42
                             }
@@ -209,6 +211,9 @@ async def main():
                                         if line.startswith('data: '):
                                             try:
                                                 chunk = json.loads(line[6:])
+                                                if 'usage' in chunk:
+                                                    prompt_usage_tokens = chunk['usage'].get('prompt_tokens', 0)
+                                                
                                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                                     delta = chunk['choices'][0].get('delta', {})
                                                     content = delta.get('content')
@@ -243,7 +248,13 @@ async def main():
                                 if ttft > 0:
                                     # Use total prompt tokens (pp + depth) for speed calculation
                                     # as the server processes the full context (especially with no-cache).
-                                    total_prompt_tokens = pp + depth
+                                    total_prompt_tokens = 0
+
+                                    if prompt_usage_tokens > 0 and prompt_usage_tokens > (pp + depth):
+                                        total_prompt_tokens = prompt_usage_tokens
+                                    else: 
+                                        total_prompt_tokens = pp + depth
+
                                     pp_speeds.append(total_prompt_tokens / ttft)
                                     ttft_values.append(ttft)
 
