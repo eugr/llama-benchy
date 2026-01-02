@@ -178,6 +178,7 @@ async def main():
                     pp_speeds = []
                     tg_speeds = []
                     ttft_values = []
+                    ttfr_values = []
                     e2e_ttft_values = []
                     
                     for run in range(args.runs):
@@ -191,6 +192,7 @@ async def main():
                         e2e_ttft = 0
                         token_count = 0
                         first_token_time = 0
+                        first_response_time = 0
                         prompt_usage_tokens = 0
                         
                         try:
@@ -237,6 +239,9 @@ async def main():
                                                     prompt_usage_tokens = chunk['usage'].get('prompt_tokens', 0)
                                                 
                                                 if 'choices' in chunk and len(chunk['choices']) > 0:
+                                                    if first_response_time == 0:
+                                                        first_response_time = chunk_time
+
                                                     delta = chunk['choices'][0].get('delta', {})
                                                     content = delta.get('content')
                                                     reasoning_content = delta.get('reasoning_content')
@@ -267,17 +272,26 @@ async def main():
                                         # Fallback if time is too small
                                         tg_speeds.append((token_count - 1) / 0.0001)
                                 
+                                # Use total prompt tokens (pp + depth) for speed calculation
+                                # as the server processes the full context (especially with no-cache).
+                                total_prompt_tokens = 0
+
+                                if prompt_usage_tokens > 0 and prompt_usage_tokens > (pp + depth):
+                                    total_prompt_tokens = prompt_usage_tokens
+                                else: 
+                                    total_prompt_tokens = pp + depth
+
+                                # Calculate TTFT for prefill speed (based on first response)
+                                ttft_response = 0
+                                if first_response_time > 0:
+                                     ttft_response = first_response_time - start_time - latency
+                                     if ttft_response < 0: ttft_response = 0
+
+                                if ttft_response > 0:
+                                     pp_speeds.append(total_prompt_tokens / ttft_response)
+                                     ttfr_values.append(ttft_response)
+                                
                                 if ttft > 0:
-                                    # Use total prompt tokens (pp + depth) for speed calculation
-                                    # as the server processes the full context (especially with no-cache).
-                                    total_prompt_tokens = 0
-
-                                    if prompt_usage_tokens > 0 and prompt_usage_tokens > (pp + depth):
-                                        total_prompt_tokens = prompt_usage_tokens
-                                    else: 
-                                        total_prompt_tokens = pp + depth
-
-                                    pp_speeds.append(total_prompt_tokens / ttft)
                                     ttft_values.append(ttft)
 
                                 if e2e_ttft > 0:
@@ -304,6 +318,12 @@ async def main():
                             ttft_std = np.std(ttft_values) * 1000
                             ttft_str = f"{ttft_mean:.2f} ± {ttft_std:.2f}"
 
+                        ttfr_str = ""
+                        if ttfr_values:
+                            ttfr_mean = np.mean(ttfr_values) * 1000
+                            ttfr_std = np.std(ttfr_values) * 1000
+                            ttfr_str = f"{ttfr_mean:.2f} ± {ttfr_std:.2f}"
+
                         e2e_ttft_str = ""
                         if e2e_ttft_values:
                             e2e_ttft_mean = np.mean(e2e_ttft_values) * 1000
@@ -313,7 +333,7 @@ async def main():
                         test_name = f"pp{pp}"
                         if depth > 0:
                             test_name += f" @ d{depth}"
-                        results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}", ttft_str, e2e_ttft_str])
+                        results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}", ttft_str, ttfr_str, e2e_ttft_str])
                     
                     if tg_speeds:
                         tg_mean = np.mean(tg_speeds)
@@ -321,12 +341,12 @@ async def main():
                         test_name = f"tg{tg}"
                         if depth > 0:
                             test_name += f" @ d{depth}"
-                        results.append([args.model, test_name, f"{tg_mean:.2f} ± {tg_std:.2f}", "", ""])
+                        results.append([args.model, test_name, f"{tg_mean:.2f} ± {tg_std:.2f}", "", "", ""])
 
         if not results:
             print("No results collected. Check if the model is generating tokens.")
         else:
-            print(tabulate(results, headers=["model", "test", "t/s", "ttft (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right")))
+            print(tabulate(results, headers=["model", "test", "t/s", "ttft (ms)", "ttfr (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
 
 if __name__ == "__main__":
     asyncio.run(main())
