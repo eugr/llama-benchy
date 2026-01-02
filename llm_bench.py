@@ -22,14 +22,15 @@ def parse_arguments():
     parser.add_argument("--api-key", type=str, default="EMPTY", help="API Key for the endpoint")
     parser.add_argument("--model", type=str, required=True, help="Model name to use for benchmarking")
     parser.add_argument("--tokenizer", type=str, default=None, help="HuggingFace tokenizer name (defaults to model name)")
-    parser.add_argument("--pp", type=int, nargs='+', required=True, help="List of prompt processing token counts")
-    parser.add_argument("--tg", type=int, nargs='+', required=True, help="List of token generation counts")
-    parser.add_argument("--depth", type=int, nargs='+', default=[0], help="List of context depths (previous conversation tokens)")
-    parser.add_argument("--runs", type=int, default=3, help="Number of runs per test")
+    parser.add_argument("--pp", type=int, nargs='+', required=True, default=[2048], help="List of prompt processing token counts - default: 2048")
+    parser.add_argument("--tg", type=int, nargs='+', required=True, default=[32], help="List of token generation counts - default: 32")
+    parser.add_argument("--depth", type=int, nargs='+', default=[0], help="List of context depths (previous conversation tokens) - default: 0")
+    parser.add_argument("--runs", type=int, default=3, help="Number of runs per test - default: 3")
     parser.add_argument("--no-cache", action="store_true", help="Ensure unique requests to avoid prefix caching")
     parser.add_argument("--post-run-cmd", type=str, default=None, help="Command to execute after each test run")
-    parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/1661/1661-0.txt", help="URL of a book to use for text generation")
-    parser.add_argument("--latency-mode", type=str, default="models", choices=["models", "generation"], help="Method to measure latency: 'models' (list models) or 'generation' (single token generation)")
+    parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/1661/1661-0.txt", help="URL of a book to use for text generation, defaults to Sherlock Holmes (https://www.gutenberg.org/files/1661/1661-0.txt)")
+    parser.add_argument("--latency-mode", type=str, default="models", choices=["models", "generation", "none"], help="Method to measure latency: 'models' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement)")
+    parser.add_argument("--no-warmup", action="store_true", help="Skip warmup phase")
     return parser.parse_args()
 
 def get_tokenizer(model_name, tokenizer_name=None):
@@ -109,6 +110,10 @@ def generate_prompt(all_tokens, tokenizer, prompt_tokens, context_tokens=0, no_c
     return context_text, prompt_text
 
 async def measure_latency(session, base_url, api_key, mode="models", model_name=None):
+    if mode == "none":
+        print("Skipping latency measurement (assuming 0 ms).")
+        return 0
+
     print(f"Measuring latency using mode: {mode}...")
     latencies = []
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -166,7 +171,8 @@ async def main():
     timeout = aiohttp.ClientTimeout(total=3600)
     connector = aiohttp.TCPConnector(limit=1, force_close=False, keepalive_timeout=600)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector, trust_env=True) as session:
-        await warmup(session, args.base_url, args.api_key, args.model)
+        if not args.no_warmup:
+            await warmup(session, args.base_url, args.api_key, args.model)
         latency = await measure_latency(session, args.base_url, args.api_key, args.latency_mode, args.model)
         
         results = []
