@@ -75,9 +75,7 @@ def prepare_text_data(book_url, tokenizer):
         return tokenizer.encode(text, add_special_tokens=False)
     except Exception as e:
         print(f"Error downloading book: {e}")
-        print("Using synthetic data.")
-        text = " ".join(["word"] * 100000)
-        return tokenizer.encode(text, add_special_tokens=False)
+        exit(1)
 
 def generate_prompt(all_tokens, tokenizer, prompt_tokens, context_tokens=0, no_cache=False):
     suffix = ""
@@ -204,6 +202,7 @@ async def main():
                     tg_speeds = []
                     ttft_values = []
                     ttfr_values = []
+                    est_ppt_values = []
                     e2e_ttft_values = []
                     
                     for run in range(args.runs):
@@ -309,15 +308,20 @@ async def main():
                                 else: 
                                     total_prompt_tokens = pp + depth
 
-                                # Calculate TTFT for prefill speed (based on first response)
-                                ttft_response = 0
+                                # Calculate TTFR and Estimated Prompt Processing Time
+                                ttfr = 0
+                                est_ppt = 0
                                 if first_response_time > 0:
-                                     ttft_response = first_response_time - start_time - latency
-                                     if ttft_response < 0: ttft_response = 0
+                                     ttfr = first_response_time - start_time
+                                     est_ppt = ttfr - latency
+                                     if est_ppt < 0: est_ppt = 0
 
-                                if ttft_response > 0:
-                                     pp_speeds.append(total_prompt_tokens / ttft_response)
-                                     ttfr_values.append(ttft_response)
+                                if est_ppt > 0:
+                                     pp_speeds.append(total_prompt_tokens / est_ppt)
+                                     est_ppt_values.append(est_ppt)
+                                
+                                if ttfr > 0:
+                                     ttfr_values.append(ttfr)
                                 
                                 if ttft > 0:
                                     ttft_values.append(ttft)
@@ -340,17 +344,17 @@ async def main():
                         pp_mean = np.mean(pp_speeds)
                         pp_std = np.std(pp_speeds)
                         
-                        ttft_str = ""
-                        if ttft_values:
-                            ttft_mean = np.mean(ttft_values) * 1000
-                            ttft_std = np.std(ttft_values) * 1000
-                            ttft_str = f"{ttft_mean:.2f} ± {ttft_std:.2f}"
-
                         ttfr_str = ""
                         if ttfr_values:
                             ttfr_mean = np.mean(ttfr_values) * 1000
                             ttfr_std = np.std(ttfr_values) * 1000
                             ttfr_str = f"{ttfr_mean:.2f} ± {ttfr_std:.2f}"
+
+                        est_ppt_str = ""
+                        if est_ppt_values:
+                            est_ppt_mean = np.mean(est_ppt_values) * 1000
+                            est_ppt_std = np.std(est_ppt_values) * 1000
+                            est_ppt_str = f"{est_ppt_mean:.2f} ± {est_ppt_std:.2f}"
 
                         e2e_ttft_str = ""
                         if e2e_ttft_values:
@@ -361,7 +365,7 @@ async def main():
                         test_name = f"pp{pp}"
                         if depth > 0:
                             test_name += f" @ d{depth}"
-                        results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}", ttft_str, ttfr_str, e2e_ttft_str])
+                        results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}", ttfr_str, est_ppt_str, e2e_ttft_str])
                     
                     if tg_speeds:
                         tg_mean = np.mean(tg_speeds)
@@ -374,7 +378,7 @@ async def main():
         if not results:
             print("No results collected. Check if the model is generating tokens.")
         else:
-            print(tabulate(results, headers=["model", "test", "t/s", "ttft (ms)", "ttfr (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
+            print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
 
 if __name__ == "__main__":
     asyncio.run(main())
