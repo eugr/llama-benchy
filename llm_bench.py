@@ -25,6 +25,7 @@ def parse_arguments():
     parser.add_argument("--no-cache", action="store_true", help="Ensure unique requests to avoid prefix caching")
     parser.add_argument("--post-run-cmd", type=str, default=None, help="Command to execute after each test run")
     parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/11/11-0.txt", help="URL of a book to use for text generation")
+    parser.add_argument("--latency-mode", type=str, default="models", choices=["models", "generation"], help="Method to measure latency: 'models' (list models) or 'generation' (single token generation)")
     return parser.parse_args()
 
 def get_tokenizer(model_name, tokenizer_name=None):
@@ -77,20 +78,29 @@ def generate_prompt(text, tokenizer, prompt_tokens, context_tokens=0, no_cache=F
         
     return context_text, prompt_text
 
-def measure_latency(client):
-    print("Measuring network latency...")
+def measure_latency(client, mode="models", model_name=None):
+    print(f"Measuring latency using mode: {mode}...")
     latencies = []
     for _ in range(3):
         start = time.time()
         try:
-            client.models.list()
+            if mode == "models":
+                client.models.list()
+            elif mode == "generation":
+                if not model_name:
+                    raise ValueError("Model name required for generation latency mode")
+                client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": "hello"}],
+                    max_tokens=1
+                )
             latencies.append(time.time() - start)
         except Exception as e:
             print(f"Error measuring latency: {e}")
     
     if latencies:
         avg_latency = np.mean(latencies)
-        print(f"Average network latency: {avg_latency*1000:.2f} ms")
+        print(f"Average latency ({mode}): {avg_latency*1000:.2f} ms")
         return avg_latency
     return 0
 
@@ -116,7 +126,7 @@ def main():
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
     
     warmup(client, args.model)
-    latency = measure_latency(client)
+    latency = measure_latency(client, args.latency_mode, args.model)
     
     results = []
     
@@ -126,6 +136,8 @@ def main():
                 print(f"Running test: pp={pp}, tg={tg}, depth={depth}")
                 pp_speeds = []
                 tg_speeds = []
+                ttft_values = []
+                e2e_ttft_values = []
                 
                 for run in range(args.runs):
                     context, prompt = generate_prompt(text_data, tokenizer, pp, depth, args.no_cache)
@@ -134,19 +146,21 @@ def main():
                         messages.append({"role": "system", "content": context})
                     messages.append({"role": "user", "content": prompt})
                     
-                    start_time = time.time()
                     ttft = 0
+                    e2e_ttft = 0
                     token_count = 0
                     first_token_time = 0
                     
                     try:
                         extra_body = {}
-                        extra_body["temperature"] = 0
-                        extra_body["n_predict"] = tg
-                        extra_body["seed"] = 42
+                        # extra_body["temperature"] = 0
+                        # extra_body["n_predict"] = tg
+                        # extra_body["seed"] = 42
                         
                         if args.no_cache:
                             extra_body["cache_prompt"] = False
+                        
+                        start_time = time.time()
 
                         stream = client.chat.completions.create(
                             model=args.model,
@@ -166,7 +180,8 @@ def main():
                                 if content or reasoning_content:
                                     if token_count == 0:
                                         first_token_time = time.time()
-                                        ttft = first_token_time - start_time - latency
+                                        e2e_ttft = first_token_time - start_time
+                                        ttft = e2e_ttft-latency
                                         if ttft < 0:
                                             ttft = 0
                                     
@@ -191,7 +206,11 @@ def main():
                                 # as the server processes the full context (especially with no-cache).
                                 total_prompt_tokens = pp + depth
                                 pp_speeds.append(total_prompt_tokens / ttft)
-                            
+                                ttft_values.append(ttft)
+
+                            if e2e_ttft > 0:
+                                e2e_ttft_values.append(e2e_ttft)
+
                     except Exception as e:
                         print(f"Error during run: {e}")
                         continue
@@ -206,10 +225,23 @@ def main():
                 if pp_speeds:
                     pp_mean = np.mean(pp_speeds)
                     pp_std = np.std(pp_speeds)
+                    
+                    ttft_str = ""
+                    if ttft_values:
+                        ttft_mean = np.mean(ttft_values) * 1000
+                        ttft_std = np.std(ttft_values) * 1000
+                        ttft_str = f"{ttft_mean:.2f} ± {ttft_std:.2f}"
+
+                    e2e_ttft_str = ""
+                    if e2e_ttft_values:
+                        e2e_ttft_mean = np.mean(e2e_ttft_values) * 1000
+                        e2e_ttft_std = np.std(e2e_ttft_values) * 1000
+                        e2e_ttft_str = f"{e2e_ttft_mean:.2f} ± {e2e_ttft_std:.2f}"
+
                     test_name = f"pp{pp}"
                     if depth > 0:
                         test_name += f" @ d{depth}"
-                    results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}"])
+                    results.append([args.model, test_name, f"{pp_mean:.2f} ± {pp_std:.2f}", ttft_str, e2e_ttft_str])
                 
                 if tg_speeds:
                     tg_mean = np.mean(tg_speeds)
@@ -217,12 +249,12 @@ def main():
                     test_name = f"tg{tg}"
                     if depth > 0:
                         test_name += f" @ d{depth}"
-                    results.append([args.model, test_name, f"{tg_mean:.2f} ± {tg_std:.2f}"])
+                    results.append([args.model, test_name, f"{tg_mean:.2f} ± {tg_std:.2f}", "", ""])
 
     if not results:
         print("No results collected. Check if the model is generating tokens.")
     else:
-        print(tabulate(results, headers=["model", "test", "t/s"], tablefmt="pipe", colalign=("left", "right", "right")))
+        print(tabulate(results, headers=["model", "test", "t/s", "ttft (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right")))
 
 if __name__ == "__main__":
     main()
