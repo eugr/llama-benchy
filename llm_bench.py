@@ -141,6 +141,10 @@ def main():
                     
                     try:
                         extra_body = {}
+                        extra_body["temperature"] = 0
+                        extra_body["n_predict"] = tg
+                        extra_body["seed"] = 42
+                        
                         if args.no_cache:
                             extra_body["cache_prompt"] = False
 
