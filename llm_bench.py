@@ -55,15 +55,21 @@ def prepare_text_data(book_url):
         print("Using synthetic data.")
         return " ".join(["word"] * 100000)
 
-def generate_prompt(text, tokenizer, prompt_tokens, context_tokens=0, no_cache=False):
-    # Create a pool of tokens large enough
-    total_needed = prompt_tokens + context_tokens
+def generate_prompt(all_tokens, tokenizer, prompt_tokens, context_tokens=0, no_cache=False):
+    suffix = ""
+    suffix_len = 0
+    if no_cache:
+        suffix = f" {uuid.uuid4()}"
+        suffix_len = len(tokenizer.encode(suffix, add_special_tokens=False))
     
-    # Encode the whole text (or a large chunk)
-    all_tokens = tokenizer.encode(text)
+    # Adjust prompt tokens to fetch from text
+    text_prompt_tokens = max(0, prompt_tokens - suffix_len)
+    
+    # Create a pool of tokens large enough
+    total_needed = text_prompt_tokens + context_tokens
     
     if len(all_tokens) < total_needed:
-        # Repeat text if not enough
+        # Repeat tokens if not enough
         all_tokens = all_tokens * (total_needed // len(all_tokens) + 2)
     
     # Pick a random start position
@@ -76,8 +82,7 @@ def generate_prompt(text, tokenizer, prompt_tokens, context_tokens=0, no_cache=F
     prompt_text = tokenizer.decode(selected_tokens[context_tokens:])
     
     if no_cache:
-        # Add a random suffix to the prompt to avoid caching
-        prompt_text += f" {uuid.uuid4()}"
+        prompt_text += suffix
         
     return context_text, prompt_text
 
@@ -133,6 +138,7 @@ async def main():
     
     tokenizer = get_tokenizer(args.model, args.tokenizer)
     text_data = prepare_text_data(args.book_url)
+    all_tokens = tokenizer.encode(text_data, add_special_tokens=False)
     
     # Use a large timeout for long-running benchmarks
     timeout = aiohttp.ClientTimeout(total=3600)
@@ -153,7 +159,7 @@ async def main():
                     e2e_ttft_values = []
                     
                     for run in range(args.runs):
-                        context, prompt = generate_prompt(text_data, tokenizer, pp, depth, args.no_cache)
+                        context, prompt = generate_prompt(all_tokens, tokenizer, pp, depth, args.no_cache)
                         messages = []
                         if context:
                             messages.append({"role": "system", "content": context})
