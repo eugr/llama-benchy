@@ -36,7 +36,7 @@ def parse_arguments():
     parser.add_argument("--no-cache", action="store_true", help="Ensure unique requests to avoid prefix caching")
     parser.add_argument("--post-run-cmd", type=str, default=None, help="Command to execute after each test run")
     parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/1661/1661-0.txt", help="URL of a book to use for text generation, defaults to Sherlock Holmes (https://www.gutenberg.org/files/1661/1661-0.txt)")
-    parser.add_argument("--latency-mode", type=str, default="models", choices=["models", "generation", "none"], help="Method to measure latency: 'models' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement)")
+    parser.add_argument("--latency-mode", type=str, default="api", choices=["api", "generation", "none"], help="Method to measure latency: 'api' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement)")
     parser.add_argument("--no-warmup", action="store_true", help="Skip warmup phase")
     parser.add_argument("--adapt-prompt", action="store_true", help="Adapt prompt size based on warmup token usage delta")
     return parser.parse_args()
@@ -115,7 +115,7 @@ def generate_prompt(all_tokens, tokenizer, prompt_tokens, context_tokens=0, no_c
         
     return context_text, prompt_text
 
-async def measure_latency(session, base_url, api_key, mode="models", model_name=None):
+async def measure_latency(session, base_url, api_key, mode="api", model_name=None):
     if mode == "none":
         print("Skipping latency measurement (assuming 0 ms).")
         return 0
@@ -127,7 +127,7 @@ async def measure_latency(session, base_url, api_key, mode="models", model_name=
     for _ in range(3):
         start = time.perf_counter()
         try:
-            if mode == "models":
+            if mode == "api":
                 async with session.get(f"{base_url}/models", headers=headers) as response:
                     await response.read()
             elif mode == "generation":
@@ -392,7 +392,7 @@ async def main():
         else:
             print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
             print(f"\nllama-bench-4all (build: {build_number})")
-            print(f"date: {current_time}")
+            print(f"date: {current_time} | latency mode: {args.latency_mode}")
 
 if __name__ == "__main__":
     asyncio.run(main())
