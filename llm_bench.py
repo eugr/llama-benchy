@@ -181,6 +181,150 @@ async def warmup(session, base_url, api_key, model, tokenizer=None):
         print(f"Warmup failed: {e}")
     return token_usage_delta
 
+async def run_benchmark(session, base_url, api_key, model_name, tokenizer, all_tokens, pp, tg, depth, no_cache, adapt_prompt, token_usage_delta, latency, post_run_cmd):
+    current_pp = pp
+    if adapt_prompt:
+        current_pp = max(1, pp - token_usage_delta)
+    context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, depth, no_cache)
+    messages = []
+    if context:
+        messages.append({"role": "system", "content": context})
+    messages.append({"role": "user", "content": prompt})
+    
+    ttft = 0
+    e2e_ttft = 0
+    token_count = 0
+    first_token_time = 0
+    first_response_time = 0
+    prompt_usage_tokens = 0
+    
+    result = {
+        "pp_speed": None,
+        "tg_speed": None,
+        "ttft": None,
+        "ttfr": None,
+        "est_ppt": None,
+        "e2e_ttft": None
+    }
+
+    try:
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": tg,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            # "temperature": 0,
+            # "seed": 42
+        }
+        
+        if no_cache:
+            payload["cache_prompt"] = False
+        
+        headers = {"Authorization": f"Bearer {api_key}"}
+        
+        start_time = time.perf_counter()
+
+        async with session.post(f"{base_url}/chat/completions", json=payload, headers=headers) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                print(f"Error: {response.status} - {error_text}")
+                return None
+
+            buffer = ""
+            decoder = codecs.getincrementaldecoder("utf-8")(errors='replace')
+            async for chunk_bytes in response.content:
+                chunk_time = time.perf_counter()
+                decoded_chunk = decoder.decode(chunk_bytes, final=False)
+                buffer += decoded_chunk
+                
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line or line == 'data: [DONE]':
+                        continue
+                    
+                    if line.startswith('data: '):
+                        try:
+                            chunk = json.loads(line[6:])
+                            if 'usage' in chunk:
+                                prompt_usage_tokens = chunk['usage'].get('prompt_tokens', 0)
+                            
+                            if 'choices' in chunk and len(chunk['choices']) > 0:
+                                if first_response_time == 0:
+                                    first_response_time = chunk_time
+
+                                delta = chunk['choices'][0].get('delta', {})
+                                content = delta.get('content')
+                                reasoning_content = delta.get('reasoning_content')
+                                
+                                if content or reasoning_content:
+                                    if token_count == 0:
+                                        first_token_time = chunk_time
+                                        e2e_ttft = first_token_time - start_time
+                                        ttft = e2e_ttft-latency
+                                        if ttft < 0:
+                                            ttft = 0
+                                    
+                                    token_count += 1
+                        except json.JSONDecodeError:
+                            continue
+        
+        end_time = time.perf_counter()
+        
+        if token_count > 0:
+            # Calculate decode time (time for subsequent tokens)
+            # If only 1 token, decode_time is effectively 0, so we can't calculate inter-token speed
+            if token_count > 1:
+                decode_time = end_time - first_token_time
+                if decode_time > 0:
+                    # Speed for the generated tokens (excluding the first one which is TTFT)
+                    result["tg_speed"] = (token_count - 1) / decode_time
+                else:
+                    # Fallback if time is too small
+                    result["tg_speed"] = (token_count - 1) / 0.0001
+            
+            # Use total prompt tokens (pp + depth) for speed calculation
+            # as the server processes the full context (especially with no-cache).
+            total_prompt_tokens = 0
+            if prompt_usage_tokens > 0 and prompt_usage_tokens > (pp + depth):
+                total_prompt_tokens = prompt_usage_tokens
+            else: 
+                total_prompt_tokens = pp + depth
+
+            # Calculate TTFR and Estimated Prompt Processing Time
+            ttfr = 0
+            est_ppt = 0
+            if first_response_time > 0:
+                    ttfr = first_response_time - start_time
+                    est_ppt = ttfr - latency
+                    if est_ppt < 0: est_ppt = 0
+
+            if est_ppt > 0:
+                    result["pp_speed"] = total_prompt_tokens / est_ppt
+                    result["est_ppt"] = est_ppt
+            
+            if ttfr > 0:
+                    result["ttfr"] = ttfr
+            
+            if ttft > 0:
+                result["ttft"] = ttft
+
+            if e2e_ttft > 0:
+                result["e2e_ttft"] = e2e_ttft
+
+    except Exception as e:
+        print(f"Error during run: {e}")
+        return None
+    
+    if post_run_cmd:
+        try:
+            subprocess.run(post_run_cmd, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Post-run command failed: {e}")
+
+    return result
+
 async def main():
     args = parse_arguments()
     build_number = get_git_revision_short_hash()
@@ -223,138 +367,21 @@ async def main():
                     e2e_ttft_values = []
                     
                     for run in range(args.runs):
-                        current_pp = pp
-                        if args.adapt_prompt:
-                            current_pp = max(1, pp - token_usage_delta)
-                        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, depth, args.no_cache)
-                        messages = []
-                        if context:
-                            messages.append({"role": "system", "content": context})
-                        messages.append({"role": "user", "content": prompt})
+                        run_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, tokenizer, all_tokens, pp, tg, depth, args.no_cache, args.adapt_prompt, token_usage_delta, latency, args.post_run_cmd)
                         
-                        ttft = 0
-                        e2e_ttft = 0
-                        token_count = 0
-                        first_token_time = 0
-                        first_response_time = 0
-                        prompt_usage_tokens = 0
-                        
-                        try:
-                            payload = {
-                                "model": served_model_name,
-                                "messages": messages,
-                                "max_tokens": tg,
-                                "stream": True,
-                                "stream_options": {"include_usage": True},
-                                # "temperature": 0,
-                                # "seed": 42
-                            }
-                            
-                            if args.no_cache:
-                                payload["cache_prompt"] = False
-                            
-                            headers = {"Authorization": f"Bearer {args.api_key}"}
-                            
-                            start_time = time.perf_counter()
-
-                            async with session.post(f"{args.base_url}/chat/completions", json=payload, headers=headers) as response:
-                                if response.status != 200:
-                                    error_text = await response.text()
-                                    print(f"Error: {response.status} - {error_text}")
-                                    continue
-
-                                buffer = ""
-                                decoder = codecs.getincrementaldecoder("utf-8")(errors='replace')
-                                async for chunk_bytes in response.content:
-                                    chunk_time = time.perf_counter()
-                                    decoded_chunk = decoder.decode(chunk_bytes, final=False)
-                                    buffer += decoded_chunk
-                                    
-                                    while "\n" in buffer:
-                                        line, buffer = buffer.split("\n", 1)
-                                        line = line.strip()
-                                        if not line or line == 'data: [DONE]':
-                                            continue
-                                        
-                                        if line.startswith('data: '):
-                                            try:
-                                                chunk = json.loads(line[6:])
-                                                if 'usage' in chunk:
-                                                    prompt_usage_tokens = chunk['usage'].get('prompt_tokens', 0)
-                                                
-                                                if 'choices' in chunk and len(chunk['choices']) > 0:
-                                                    if first_response_time == 0:
-                                                        first_response_time = chunk_time
-
-                                                    delta = chunk['choices'][0].get('delta', {})
-                                                    content = delta.get('content')
-                                                    reasoning_content = delta.get('reasoning_content')
-                                                    
-                                                    if content or reasoning_content:
-                                                        if token_count == 0:
-                                                            first_token_time = chunk_time
-                                                            e2e_ttft = first_token_time - start_time
-                                                            ttft = e2e_ttft-latency
-                                                            if ttft < 0:
-                                                                ttft = 0
-                                                        
-                                                        token_count += 1
-                                            except json.JSONDecodeError:
-                                                continue
-                            
-                            end_time = time.perf_counter()
-                            
-                            if token_count > 0:
-                                # Calculate decode time (time for subsequent tokens)
-                                # If only 1 token, decode_time is effectively 0, so we can't calculate inter-token speed
-                                if token_count > 1:
-                                    decode_time = end_time - first_token_time
-                                    if decode_time > 0:
-                                        # Speed for the generated tokens (excluding the first one which is TTFT)
-                                        tg_speeds.append((token_count - 1) / decode_time)
-                                    else:
-                                        # Fallback if time is too small
-                                        tg_speeds.append((token_count - 1) / 0.0001)
-                                
-                                # Use total prompt tokens (pp + depth) for speed calculation
-                                # as the server processes the full context (especially with no-cache).
-                                total_prompt_tokens = 0
-
-                                if prompt_usage_tokens > 0 and prompt_usage_tokens > (pp + depth):
-                                    total_prompt_tokens = prompt_usage_tokens
-                                else: 
-                                    total_prompt_tokens = pp + depth
-
-                                # Calculate TTFR and Estimated Prompt Processing Time
-                                ttfr = 0
-                                est_ppt = 0
-                                if first_response_time > 0:
-                                     ttfr = first_response_time - start_time
-                                     est_ppt = ttfr - latency
-                                     if est_ppt < 0: est_ppt = 0
-
-                                if est_ppt > 0:
-                                     pp_speeds.append(total_prompt_tokens / est_ppt)
-                                     est_ppt_values.append(est_ppt)
-                                
-                                if ttfr > 0:
-                                     ttfr_values.append(ttfr)
-                                
-                                if ttft > 0:
-                                    ttft_values.append(ttft)
-
-                                if e2e_ttft > 0:
-                                    e2e_ttft_values.append(e2e_ttft)
-
-                        except Exception as e:
-                            print(f"Error during run: {e}")
-                            continue
-                        
-                        if args.post_run_cmd:
-                            try:
-                                subprocess.run(args.post_run_cmd, shell=True, check=True)
-                            except subprocess.CalledProcessError as e:
-                                print(f"Post-run command failed: {e}")
+                        if run_result:
+                            if run_result["tg_speed"] is not None:
+                                tg_speeds.append(run_result["tg_speed"])
+                            if run_result["pp_speed"] is not None:
+                                pp_speeds.append(run_result["pp_speed"])
+                            if run_result["est_ppt"] is not None:
+                                est_ppt_values.append(run_result["est_ppt"])
+                            if run_result["ttfr"] is not None:
+                                ttfr_values.append(run_result["ttfr"])
+                            if run_result["ttft"] is not None:
+                                ttft_values.append(run_result["ttft"])
+                            if run_result["e2e_ttft"] is not None:
+                                e2e_ttft_values.append(run_result["e2e_ttft"])
 
                     # Aggregate results
                     if pp_speeds:
