@@ -6,6 +6,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import time
 import uuid
 import subprocess
+import datetime
 import numpy as np
 from tabulate import tabulate
 import aiohttp
@@ -15,6 +16,12 @@ import codecs
 import hashlib
 from transformers import AutoTokenizer
 import requests
+
+def get_git_revision_short_hash():
+    try:
+        return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
+    except Exception:
+        return "unknown"
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="LLM Benchmark Script")
@@ -172,6 +179,10 @@ async def warmup(session, base_url, api_key, model, tokenizer=None):
 
 async def main():
     args = parse_arguments()
+    build_number = get_git_revision_short_hash()
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"llama-bench-4all (build: {build_number})")
+    print(f"Date: {current_time}")
     print(f"Benchmarking model: {args.model} at {args.base_url}")
     
     tokenizer = get_tokenizer(args.model, args.tokenizer)
@@ -375,10 +386,13 @@ async def main():
                             test_name += f" @ d{depth}"
                         results.append([args.model, test_name, f"{tg_mean:.2f} ± {tg_std:.2f}", "", "", ""])
 
+        print()
         if not results:
             print("No results collected. Check if the model is generating tokens.")
         else:
             print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
+            print(f"\nllama-bench-4all (build: {build_number})")
+            print(f"date: {current_time}")
 
 if __name__ == "__main__":
     asyncio.run(main())
