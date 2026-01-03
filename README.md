@@ -46,17 +46,34 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 python llm_bench.py --base-url <ENDPOINT_URL> --model <MODEL_NAME> --pp <PROMPT_TOKENS> --tg <GEN_TOKENS> [OPTIONS]
 ```
 
+Example:
+
+```bash
+python llm_bench.py \
+  --base-url http://localhost:8000/v1 \
+  --model openai/gpt-oss-120b \
+  --depth 0 4096 8192 16384 32768 \
+  --adapt-prompt \
+  --latency-mode generation
+```
+
+It's recommended to use "generation" latency mode to get prompt processing speeds closer to real numbers, especially on shorter prompts.
+`--adapt-prompt` will ensure the prompt tokens match the specified value, regardless of the chat template applied.
+
+Generally you don't need to disable prompt caching on the server, as a probability of cache hits is fairly small. You can add `--no-cache` that will add some random noise if you get cache hits.
+
 ### Arguments
 
 -   `--base-url`: OpenAI compatible endpoint URL (Required).
 -   `--api-key`: API Key (Default: "EMPTY").
 -   `--model`: Model name (Required).
+-   `--served-model-name`: Model name used in API calls (Defaults to --model if not specified).
 -   `--tokenizer`: HuggingFace tokenizer name (Defaults to model name).
 -   `--pp`: List of prompt processing token counts (Default: [2048]).
 -   `--tg`: List of token generation counts (Default: [32]).
 -   `--depth`: List of context depths (Default: [0]).
 -   `--runs`: Number of runs per test (Default: 3).
--   `--no-cache`: Ensure unique requests to avoid prefix caching.
+-   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'models' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement).

@@ -25,12 +25,13 @@ def parse_arguments():
     parser.add_argument("--base-url", type=str, required=True, help="OpenAI compatible endpoint URL")
     parser.add_argument("--api-key", type=str, default="EMPTY", help="API Key for the endpoint")
     parser.add_argument("--model", type=str, required=True, help="Model name to use for benchmarking")
+    parser.add_argument("--served-model-name", type=str, default=None, help="Model name used in API calls (defaults to --model if not specified)")
     parser.add_argument("--tokenizer", type=str, default=None, help="HuggingFace tokenizer name (defaults to model name)")
     parser.add_argument("--pp", type=int, nargs='+', required=False, default=[2048], help="List of prompt processing token counts - default: 2048")
     parser.add_argument("--tg", type=int, nargs='+', required=False, default=[32], help="List of token generation counts - default: 32")
     parser.add_argument("--depth", type=int, nargs='+', default=[0], help="List of context depths (previous conversation tokens) - default: 0")
     parser.add_argument("--runs", type=int, default=3, help="Number of runs per test - default: 3")
-    parser.add_argument("--no-cache", action="store_true", help="Ensure unique requests to avoid prefix caching")
+    parser.add_argument("--no-cache", action="store_true", help="Ensure unique requests to avoid prefix caching and send cache_prompt=false to the server")
     parser.add_argument("--post-run-cmd", type=str, default=None, help="Command to execute after each test run")
     parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/1661/1661-0.txt", help="URL of a book to use for text generation, defaults to Sherlock Holmes (https://www.gutenberg.org/files/1661/1661-0.txt)")
     parser.add_argument("--latency-mode", type=str, default="api", choices=["api", "generation", "none"], help="Method to measure latency: 'api' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement)")
@@ -182,6 +183,8 @@ async def main():
     print(f"Date: {current_time}")
     print(f"Benchmarking model: {args.model} at {args.base_url}")
     
+    served_model_name = args.served_model_name if args.served_model_name else args.model
+
     tokenizer = get_tokenizer(args.model, args.tokenizer)
     all_tokens = prepare_text_data(args.book_url, tokenizer)
     print(f"Total tokens available in text corpus: {len(all_tokens)}")
@@ -196,9 +199,9 @@ async def main():
             should_warmup = True
             
         if should_warmup:
-            token_usage_delta = await warmup(session, args.base_url, args.api_key, args.model, tokenizer if args.adapt_prompt else None)
+            token_usage_delta = await warmup(session, args.base_url, args.api_key, served_model_name, tokenizer if args.adapt_prompt else None)
 
-        latency = await measure_latency(session, args.base_url, args.api_key, args.latency_mode, args.model)
+        latency = await measure_latency(session, args.base_url, args.api_key, args.latency_mode, served_model_name)
         
         results = []
         
@@ -232,7 +235,7 @@ async def main():
                         
                         try:
                             payload = {
-                                "model": args.model,
+                                "model": served_model_name,
                                 "messages": messages,
                                 "max_tokens": tg,
                                 "stream": True,
