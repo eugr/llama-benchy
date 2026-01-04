@@ -412,7 +412,7 @@ async def main():
                                 current_pp = max(1, pp - delta_user)
                             else:
                                 current_depth = max(1, depth - delta_context)
-                        print(f"current_pp={current_pp}, current_depth={current_depth}")
+
                         context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, args.no_cache)
                         
                         if args.enable_prefix_caching and depth > 0:

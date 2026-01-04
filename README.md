@@ -44,13 +44,13 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 ## Usage
 
 ```bash
-python llm_bench.py --base-url <ENDPOINT_URL> --model <MODEL_NAME> --pp <PROMPT_TOKENS> --tg <GEN_TOKENS> [OPTIONS]
+python llama-benchy.py --base-url <ENDPOINT_URL> --model <MODEL_NAME> --pp <PROMPT_TOKENS> --tg <GEN_TOKENS> [OPTIONS]
 ```
 
 Example:
 
 ```bash
-python llm_bench.py \
+python llama-benchy.py \
   --base-url http://localhost:8000/v1 \
   --model openai/gpt-oss-120b \
   --depth 0 4096 8192 16384 32768 \
@@ -147,7 +147,7 @@ By comparing the `pp` speed of the Inference step with a non-cached run (or the 
 ### Example
 
 ```bash
-python llm_bench.py \
+python llama-benchy.py \
   --base-url http://localhost:8000/v1 \
   --model openai/gpt-oss-120b \
   --pp 128 256 \
