@@ -52,7 +52,7 @@ def get_tokenizer(model_name, tokenizer_name=None):
 def prepare_text_data(book_url, tokenizer):
     try:
         # Create cache directory if it doesn't exist
-        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "llama-bench-4all")
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "llama-benchy")
         os.makedirs(cache_dir, exist_ok=True)
         
         # Generate hash of the URL for the filename
@@ -360,7 +360,7 @@ async def main():
 
     build_number = get_git_revision_short_hash()
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"llama-bench-4all (build: {build_number})")
+    print(f"llama-benchy (build: {build_number})")
     print(f"Date: {current_time}")
     print(f"Benchmarking model: {args.model} at {args.base_url}")
     
@@ -509,7 +509,7 @@ async def main():
             print("No results collected. Check if the model is generating tokens.")
         else:
             print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
-            print(f"\nllama-bench-4all (build: {build_number})")
+            print(f"\nllama-benchy (build: {build_number})")
             print(f"date: {current_time} | latency mode: {args.latency_mode}")
 
 if __name__ == "__main__":

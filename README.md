@@ -1,4 +1,4 @@
-# LLM Benchmark Script
+# llama-benchy - llama-bench style benchmarking tool for all backends
 
 This script benchmarks OpenAI-compatible LLM endpoints, generating statistics similar to `llama-bench`.
 
@@ -74,7 +74,7 @@ Output:
 | openai/gpt-oss-120b | pp2048 @ d32768 | 1131.86 ± 50.53 | 30869.90 ± 1410.15 | 30829.92 ± 1410.15 | 30992.96 ± 1417.33 |
 | openai/gpt-oss-120b |   tg32 @ d32768 |    25.34 ± 1.31 |                    |                    |                    |
 
-llama-bench-4all (build: 75bc129)
+llama-benchy (build: 75bc129)
 date: 2026-01-02 17:11:19 | latency mode: generation
 
 -------
