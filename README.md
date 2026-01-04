@@ -19,7 +19,8 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 
 ## Features
 
-- Measures Prompt Processing (pp) and Token Generation (tg) speeds.
+- Measures Prompt Processing (pp) and Token Generation (tg) speeds at different context depths.
+- Can measure separate context prefill and prompt processing over existing cached context at different context depths.
 - Reports Time To First Response (TTFR), Estimated Prompt Processing Time (est_ppt), and End-to-End TTFT.
 - Supports configurable prompt length (`--pp`), generation length (`--tg`), and context depth (`--depth`).
 - Can run multiple iterations (`--runs`) and report mean ± std.
@@ -97,7 +98,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
--   `--latency-mode`: Method to measure latency: 'models' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
+-   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
 -   `--no-warmup`: Skip warmup phase.
 -   `--adapt-prompt`: Adapt prompt size based on warmup token usage delta.
 -   `--enable-prefix-caching`: Enable prefix caching performance measurement. When enabled (and depth > 0), it performs a two-step benchmark: first loading the context (reported as `ctx_pp`), then running the prompt with the cached context.
@@ -109,7 +110,7 @@ The script outputs a table with the following metrics. All time measurements are
 #### Latency Adjustment
 The script attempts to estimate network or processing latency to provide "server-side" processing times.
 - **Latency**: Measured based on `--latency-mode`.
-  - `models`: Time to fetch `/models` (from sending request to getting first byte of the response). Eliminates network latency only.
+  - `api`: Time to fetch `/models` (from sending request to getting first byte of the response). Eliminates network latency only.
   - `generation`: Time to generate 1 token (from sending request to getting first byte of the response). Tries to eliminate network and server overhead latency.
   - `none`: Assumed to be 0.
 - This measured latency is subtracted from `ttfr` to calculate `est_ppt`.
