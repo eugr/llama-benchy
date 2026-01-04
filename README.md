@@ -123,7 +123,7 @@ The script attempts to estimate network or processing latency to provide "server
 
 -   **`ttfr (ms)` (Time To First Response)**:
     -   Calculation: `Time of First Response Chunk - Start Time`.
-    -   Represents the raw time until the client receives *any* response from the server (including empty chunks or role definitions). This includes network latency. The same measurement method is used by `vllm bench serve` to report TTFT.
+    -   Represents the raw time until the client receives *any* stream data from the server (including empty chunks or role definitions, but excluding initial http response header). This includes network latency. The same measurement method is used by `vllm bench serve` to report TTFT.
 
 -   **`est_ppt (ms)` (Estimated Prompt Processing Time)**:
     -   Calculation: `TTFR - Estimated Latency`.
