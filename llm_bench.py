@@ -375,18 +375,22 @@ async def main():
                     
                     for run in range(args.runs):
                         current_pp = pp
+                        current_depth = depth
                         if args.adapt_prompt:
-                            current_pp = max(1, pp - token_usage_delta)
-                        
-                        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, depth, args.no_cache)
+                            if depth == 0:
+                                current_pp = max(1, pp - token_usage_delta)
+                            else:
+                                current_depth = max(1, depth - token_usage_delta)
+                        print(f"current_pp={current_pp}, current_depth={current_depth}")
+                        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, args.no_cache)
                         
                         if args.enable_prefix_caching and depth > 0:
                             # Request 1: Context only
                             # We send context as system message, and empty prompt as user message.
                             # This establishes the prefix: [System: Context] [User: ""]
-                            # Expected PP tokens = depth (context size)
+                            # Expected PP tokens = current_depth (context size)
                             print(f"  Run {run+1}/{args.runs} (Context Load)...")
-                            ctx_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, "", depth, tg, args.no_cache, latency, None)
+                            ctx_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, "", current_depth, tg, args.no_cache, latency, None)
                             
                             if ctx_result:
                                 if ctx_result["pp_speed"] is not None:
@@ -402,8 +406,8 @@ async def main():
                             run_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, prompt, current_pp, tg, args.no_cache, latency, args.post_run_cmd)
                         else:
                             # Standard run
-                            # Expected PP tokens = current_pp + depth
-                            expected_tokens = current_pp + depth
+                            # Expected PP tokens = current_pp + current_depth
+                            expected_tokens = current_pp + current_depth
                             run_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, prompt, expected_tokens, tg, args.no_cache, latency, args.post_run_cmd)
                         
                         if run_result:
@@ -427,6 +431,16 @@ async def main():
                         std = np.std(values) * multiplier
                         return f"{mean:.2f} ± {std:.2f}"
 
+                    # Context PP (if enabled)
+                    if ctx_pp_speeds:
+                        test_name = f"ctx_pp @ d{depth}"
+                        results.append([args.model, test_name, format_result(ctx_pp_speeds), "", "", ""])
+
+                    # Context TG (if enabled)
+                    if ctx_tg_speeds:
+                        test_name = f"ctx_tg @ d{depth}"
+                        results.append([args.model, test_name, format_result(ctx_tg_speeds), "", "", ""])
+
                     # Standard PP
                     if pp_speeds:
                         test_name = f"pp{pp}"
@@ -445,16 +459,6 @@ async def main():
                         test_name = f"tg{tg}"
                         if depth > 0: test_name += f" @ d{depth}"
                         results.append([args.model, test_name, format_result(tg_speeds), "", "", ""])
-
-                    # Context PP (if enabled)
-                    if ctx_pp_speeds:
-                        test_name = f"ctx_pp @ d{depth}"
-                        results.append([args.model, test_name, format_result(ctx_pp_speeds), "", "", ""])
-
-                    # Context TG (if enabled)
-                    if ctx_tg_speeds:
-                        test_name = f"ctx_tg @ d{depth}"
-                        results.append([args.model, test_name, format_result(ctx_tg_speeds), "", "", ""])
 
         print()
         if not results:
