@@ -31,25 +31,57 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 
 ## Installation
 
-### Option 1: Install from source
+Install `uv` first: https://docs.astral.sh/uv/getting-started/installation/
+
+### Option 1: Run without installation using `uvx`
+
+```bash
+uvx --from git+https://github.com/eugr/llama-benchy llama-benchy --base-url <ENDPOINT_URL> --model <MODEL_NAME>
+```
+
+### Option 2: Install into virtual environment
 
 ```bash
 # Clone the repository
-git clone https://github.com/user/llama-benchy.git
+git clone https://github.com/eugr/llama-benchy.git
 cd llama-benchy
 
-# Install with uv (creates a virtual environment automatically)
+# Create virtual environment
+uv venv
+
+# Install with uv (installs into a virtual environment automatically)
 uv pip install -e .
 ```
 
-### Option 2: Run without installing
+To run, activate the environment first
 
 ```bash
-# Using uv run (no installation required)
+source .venv/bin/activate
+```
+
+Then execute the command:
+
+```bash
+llama-benchy --base-url <ENDPOINT_URL> --model <MODEL_NAME>
+```
+
+
+### Option 3: Run without installing (`uv run`)
+
+```bash
+# Clone the repository
+git clone https://github.com/eugr/llama-benchy.git
+cd llama-benchy
+
+# Using uv run (creates a virtual environment if it doesn't exist and runs the command)
 uv run llama-benchy --base-url <ENDPOINT_URL> --model <MODEL_NAME>
 ```
 
-Note: `uvx` doesn't work directly with local packages, so you'll need to install the package first or use `uv run`.
+### Option 3: Install into system path
+
+```bash
+uv pip install git+https://github.com/eugr/llama-benchy --system
+```
 
 ## Usage
 
