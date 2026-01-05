@@ -54,7 +54,6 @@ python llama-benchy.py \
   --base-url http://localhost:8000/v1 \
   --model openai/gpt-oss-120b \
   --depth 0 4096 8192 16384 32768 \
-  --adapt-prompt \
   --latency-mode generation
 ```
 
@@ -80,7 +79,7 @@ date: 2026-01-02 17:11:19 | latency mode: generation
 -------
 
 It's recommended to use "generation" latency mode to get prompt processing speeds closer to real numbers, especially on shorter prompts.
-`--adapt-prompt` will ensure the prompt tokens match the specified value, regardless of the chat template applied.
+By default, the script adapts the prompt size to match the specified value, regardless of the chat template applied. Use `--no-adapt-prompt` to disable this behavior.
 
 Generally you don't need to disable prompt caching on the server, as a probability of cache hits is fairly small. You can add `--no-cache` that will add some random noise if you get cache hits.
 
@@ -100,7 +99,8 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
 -   `--no-warmup`: Skip warmup phase.
--   `--adapt-prompt`: Adapt prompt size based on warmup token usage delta.
+-   `--adapt-prompt`: Adapt prompt size based on warmup token usage delta (Default: True).
+-   `--no-adapt-prompt`: Disable prompt size adaptation.
 -   `--enable-prefix-caching`: Enable prefix caching performance measurement. When enabled (and depth > 0), it performs a two-step benchmark: first loading the context (reported as `ctx_pp`), then running the prompt with the cached context.
 
 ### Metrics

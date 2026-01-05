@@ -36,7 +36,8 @@ def parse_arguments():
     parser.add_argument("--book-url", type=str, default="https://www.gutenberg.org/files/1661/1661-0.txt", help="URL of a book to use for text generation, defaults to Sherlock Holmes (https://www.gutenberg.org/files/1661/1661-0.txt)")
     parser.add_argument("--latency-mode", type=str, default="api", choices=["api", "generation", "none"], help="Method to measure latency: 'api' (list models) - default, 'generation' (single token generation), or 'none' (skip latency measurement)")
     parser.add_argument("--no-warmup", action="store_true", help="Skip warmup phase")
-    parser.add_argument("--adapt-prompt", action="store_true", help="Adapt prompt size based on warmup token usage delta")
+    parser.add_argument("--adapt-prompt", action="store_true", default=True, help="Adapt prompt size based on warmup token usage delta (default: True)")
+    parser.add_argument("--no-adapt-prompt", action="store_false", dest="adapt_prompt", help="Disable prompt size adaptation")
     parser.add_argument("--enable-prefix-caching", action="store_true", help="Enable prefix caching performance measurement")
     return parser.parse_args()
 
