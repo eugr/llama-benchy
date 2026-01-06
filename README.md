@@ -29,6 +29,12 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 - Supports executing a command after each run (e.g., to clear cache).
 - Configurable latency measurement mode.
 
+# Current Limitations
+
+- Evaluates against `/v1/chat/completions` endpoint only.
+- Doesn't measure throughput in concurrency mode (coming later).
+- Outputs results as a Markdown table only for now.
+
 ## Installation
 
 Using `uv` is recommended. You can install `uv` here: https://docs.astral.sh/uv/getting-started/installation/
