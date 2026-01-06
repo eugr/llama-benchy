@@ -25,6 +25,7 @@ from . import __build__, __version__
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="LLM Benchmark Script")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}.{__build__}")
     parser.add_argument("--base-url", type=str, required=True, help="OpenAI compatible endpoint URL")
     parser.add_argument("--api-key", type=str, default="EMPTY", help="API Key for the endpoint")
     parser.add_argument("--model", type=str, required=True, help="Model name to use for benchmarking")

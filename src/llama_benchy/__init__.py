@@ -22,3 +22,6 @@ if "+" in __version__:
             __build__ = build_part
     except (IndexError, AttributeError):
         pass
+else:
+    # For release versions (no '+'), set build to empty string
+    __build__ = ""
