@@ -202,7 +202,7 @@ When `--enable-prefix-caching` is used (with `--depth` > 0), the script performs
 2.  **Inference**: Sends the same context (system message) followed by the actual prompt (user message). The server should reuse the cached context.
     -   Reported as standard `pp{tokens} @ d{depth}` and `tg{tokens} @ d{depth}`.
 
-By comparing the `pp` speed of the Inference step with a non-cached run (or the Context Load step), you can observe the speedup provided by prefix caching.
+In this case, `pp` and `tg` speeds will show an actual prompt processing / token generation speeds for a follow up prompt with a context pre-filled.
 
 ### Example
 
