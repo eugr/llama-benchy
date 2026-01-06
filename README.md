@@ -12,7 +12,7 @@ Also, it performs measurements using the C++ engine directly which is not repres
 vLLM has its own powerful benchmarking tool, but while it can be used with other inference engines, there are a few issues:
 
 - It's very tricky and even impossible to calculate prompt processing speeds at different context lengths. You can use `vllm bench sweep serve`, but it only works well with vLLM with prefix caching disabled on the server. Even with random prompts it will reuse the same prompt between multiple runs which will hit the cache in `llama-server` for instance. So you will get very low median TTFT times and very high prompt processing speeds. 
-- The TTFT measurement it uses is not actually until the first usable token, it's until the very first response from the server which may not contain any tokens in /v1/chat/completions mode.
+- The TTFT measurement it uses is not actually until the first usable token, it's until the very first data chunk from the server which may not contain any generated tokens in /v1/chat/completions mode.
 - Random dataset is the only ones that allows to specify an arbitrary number of tokens, but randomly generated token sequence doesn't let you adequately measure speculative decoding/MTP.
 
 As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool that brings llama-bench style measurements at different context lengths to any OpenAI-compatible endpoint.
@@ -21,7 +21,7 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 
 - Measures Prompt Processing (pp) and Token Generation (tg) speeds at different context depths.
 - Can measure separate context prefill and prompt processing over existing cached context at different context depths.
-- Reports Time To First Response (TTFR), Estimated Prompt Processing Time (est_ppt), and End-to-End TTFT.
+- Reports Time To First Response (data chunk) (TTFR), Estimated Prompt Processing Time (est_ppt), and End-to-End TTFT.
 - Supports configurable prompt length (`--pp`), generation length (`--tg`), and context depth (`--depth`).
 - Can run multiple iterations (`--runs`) and report mean ± std.
 - Uses HuggingFace tokenizers for accurate token counts.
