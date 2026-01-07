@@ -19,13 +19,13 @@ from transformers import AutoTokenizer
 import requests
 
 # Build number is now imported from __init__.py
-from . import __build__, __version__
+from . import __version__
 
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="LLM Benchmark Script")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}.{__build__}")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--base-url", type=str, required=True, help="OpenAI compatible endpoint URL")
     parser.add_argument("--api-key", type=str, default="EMPTY", help="API Key for the endpoint")
     parser.add_argument("--model", type=str, required=True, help="Model name to use for benchmarking")
@@ -370,11 +370,10 @@ async def main_async():
         print("Error: --enable-prefix-caching and --no-cache are incompatible.")
         return
 
-    build_number = __build__
     version_number = __version__
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"llama-benchy ({version_number}.{build_number})")
+    print(f"llama-benchy ({version_number})")
     print(f"Date: {current_time}")
     print(f"Benchmarking model: {args.model} at {args.base_url}")
     
@@ -523,7 +522,7 @@ async def main_async():
             print("No results collected. Check if the model is generating tokens.")
         else:
             print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
-            print(f"\nllama-benchy ({version_number}.{build_number})")
+            print(f"\nllama-benchy ({version_number})")
             print(f"date: {current_time} | latency mode: {args.latency_mode}")
 
 
