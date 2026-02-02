@@ -32,7 +32,6 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 # Current Limitations
 
 - Evaluates against `/v1/chat/completions` endpoint only.
-- Doesn't measure throughput in concurrency mode (coming later).
 - Outputs results as a Markdown table only for now.
 
 ## Installation
@@ -168,6 +167,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--adapt-prompt`: Adapt prompt size based on warmup token usage delta (Default: True).
 -   `--no-adapt-prompt`: Disable prompt size adaptation.
 -   `--enable-prefix-caching`: Enable prefix caching performance measurement. When enabled (and depth > 0), it performs a two-step benchmark: first loading the context (reported as `ctx_pp`), then running the prompt with the cached context.
+-   `--concurrency`: List of concurrency levels (simultaneous requests) (Default: [1]). Values > 1 fire N requests simultaneously and report aggregate throughput.
 
 ### Metrics
 
@@ -209,6 +209,50 @@ When `--enable-prefix-caching` is used (with `--depth` > 0), the script performs
     -   Reported as standard `pp{tokens} @ d{depth}` and `tg{tokens} @ d{depth}`.
 
 In this case, `pp` and `tg` speeds will show an actual prompt processing / token generation speeds for a follow up prompt with a context pre-filled.
+
+### Concurrent Throughput Mode
+
+Use `--concurrency` to measure aggregate server throughput under load. When concurrency > 1, N requests are fired simultaneously and aggregate metrics are reported in a separate table.
+
+```bash
+llama-benchy \
+  --base-url http://localhost:8000/v1 \
+  --model my-model \
+  --pp 512 --tg 32 \
+  --concurrency 1 2 4 8
+```
+
+This produces the standard serial results table (for concurrency 1) plus a concurrent throughput table:
+
+| model | test | pp agg t/s | tg agg t/s | req/s | avg e2e_ttft (ms) | p99 e2e_ttft (ms) | errors |
+|:------|------:|-----------:|-----------:|------:|------------------:|------------------:|-------:|
+| my-model | pp512/tg32 x2 | ... | ... | ... | ... | ... | 0 |
+| my-model | pp512/tg32 x4 | ... | ... | ... | ... | ... | 0 |
+| my-model | pp512/tg32 x8 | ... | ... | ... | ... | ... | 0 |
+
+Concurrent throughput metrics:
+- **pp agg t/s**: Total prompt tokens across all concurrent requests / wall-clock time
+- **tg agg t/s**: Total generated tokens across all concurrent requests / wall-clock time
+- **req/s**: Successful requests / wall-clock time
+- **avg e2e_ttft**: Mean end-to-end time to first token across requests in the batch
+- **p99 e2e_ttft**: 99th percentile end-to-end time to first token
+- **errors**: Count of failed requests
+
+**Important:** Use `--no-cache` with concurrent tests. Without it, the server's KV cache may serve repeated or partially overlapping prefixes from cache, inflating throughput numbers. `--no-cache` appends a unique UUID to each request and sends `cache_prompt=false`, ensuring every concurrent request is a cold prompt evaluation.
+
+```bash
+llama-benchy \
+  --base-url http://localhost:8000/v1 \
+  --model my-model \
+  --pp 512 --tg 32 \
+  --concurrency 1 2 4 8 \
+  --no-cache
+```
+
+Notes:
+- `--runs` repeats each concurrent batch; mean ± std is computed across batches
+- `--post-run-cmd` executes once per batch (not per request within a batch)
+- `--enable-prefix-caching` is not supported with concurrency > 1 (a warning is printed and prefix caching only runs at concurrency 1)
 
 ### Example
 

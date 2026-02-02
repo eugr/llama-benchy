@@ -23,6 +23,14 @@ from . import __version__
 
 
 
+def format_result(values, multiplier=1.0):
+    if not values:
+        return ""
+    mean = np.mean(values) * multiplier
+    std = np.std(values) * multiplier
+    return f"{mean:.2f} ± {std:.2f}"
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="LLM Benchmark Script")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -43,6 +51,7 @@ def parse_arguments():
     parser.add_argument("--adapt-prompt", action="store_true", default=True, help="Adapt prompt size based on warmup token usage delta (default: True)")
     parser.add_argument("--no-adapt-prompt", action="store_false", dest="adapt_prompt", help="Disable prompt size adaptation")
     parser.add_argument("--enable-prefix-caching", action="store_true", help="Enable prefix caching performance measurement")
+    parser.add_argument("--concurrency", type=int, nargs='+', default=[1], help="List of concurrency levels (simultaneous requests) - default: 1 (serial)")
     return parser.parse_args()
 
 
@@ -239,7 +248,8 @@ async def run_benchmark(session, base_url, api_key, model_name, context_text, pr
         "ttft": None,
         "ttfr": None,
         "est_ppt": None,
-        "e2e_ttft": None
+        "e2e_ttft": None,
+        "token_count": 0
     }
     
     # DEBUG: Buffer to store first few lines of raw response
@@ -368,6 +378,8 @@ async def run_benchmark(session, base_url, api_key, model_name, context_text, pr
             if e2e_ttft > 0:
                 result["e2e_ttft"] = e2e_ttft
 
+            result["token_count"] = token_count
+
     except Exception as e:
         print(f"Error during run: {e}")
         return None
@@ -381,12 +393,193 @@ async def run_benchmark(session, base_url, api_key, model_name, context_text, pr
     return result
 
 
+def adapt_token_counts(pp, depth, adapt_prompt, delta_user, delta_context):
+    """Adjust pp and depth based on warmup token usage delta."""
+    if adapt_prompt:
+        if depth == 0:
+            return max(1, pp - delta_user), depth
+        else:
+            return pp, max(1, depth - delta_context)
+    return pp, depth
+
+
+async def run_serial_test(session, base_url, api_key, model_name,
+        all_tokens, tokenizer, pp, tg, depth, runs,
+        no_cache, latency, post_run_cmd, adapt_prompt, delta_user, delta_context,
+        enable_prefix_caching, display_model_name=None):
+    """Run serial (single-request) benchmark tests and return formatted result rows."""
+    display_name = display_model_name or model_name
+    print(f"Running test: pp={pp}, tg={tg}, depth={depth}")
+    pp_speeds = []
+    tg_speeds = []
+    ttft_values = []
+    ttfr_values = []
+    est_ppt_values = []
+    e2e_ttft_values = []
+
+    ctx_pp_speeds = []
+    ctx_tg_speeds = []
+    ctx_ttfr_values = []
+    ctx_est_ppt_values = []
+    ctx_e2e_ttft_values = []
+
+    for run in range(runs):
+        current_pp, current_depth = adapt_token_counts(pp, depth, adapt_prompt, delta_user, delta_context)
+        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, no_cache)
+
+        if enable_prefix_caching and depth > 0:
+            # Request 1: Context only — loads context into server cache
+            print(f"  Run {run+1}/{runs} (Context Load)...")
+            ctx_result = await run_benchmark(session, base_url, api_key, model_name, context, "", current_depth, tg, no_cache, latency, None)
+
+            if ctx_result:
+                if ctx_result["pp_speed"] is not None:
+                    ctx_pp_speeds.append(ctx_result["pp_speed"])
+                if ctx_result["tg_speed"] is not None:
+                    ctx_tg_speeds.append(ctx_result["tg_speed"])
+                if ctx_result["ttfr"] is not None:
+                    ctx_ttfr_values.append(ctx_result["ttfr"])
+                if ctx_result["est_ppt"] is not None:
+                    ctx_est_ppt_values.append(ctx_result["est_ppt"])
+                if ctx_result["e2e_ttft"] is not None:
+                    ctx_e2e_ttft_values.append(ctx_result["e2e_ttft"])
+
+            # Request 2: Inference with cached context
+            print(f"  Run {run+1}/{runs} (Inference)...")
+            run_result = await run_benchmark(session, base_url, api_key, model_name, context, prompt, current_pp, tg, no_cache, latency, post_run_cmd)
+        else:
+            # Standard run — expected PP tokens = current_pp + current_depth
+            expected_tokens = current_pp + current_depth
+            run_result = await run_benchmark(session, base_url, api_key, model_name, context, prompt, expected_tokens, tg, no_cache, latency, post_run_cmd)
+
+        if run_result:
+            if run_result["tg_speed"] is not None:
+                tg_speeds.append(run_result["tg_speed"])
+            if run_result["pp_speed"] is not None:
+                pp_speeds.append(run_result["pp_speed"])
+            if run_result["est_ppt"] is not None:
+                est_ppt_values.append(run_result["est_ppt"])
+            if run_result["ttfr"] is not None:
+                ttfr_values.append(run_result["ttfr"])
+            if run_result["ttft"] is not None:
+                ttft_values.append(run_result["ttft"])
+            if run_result["e2e_ttft"] is not None:
+                e2e_ttft_values.append(run_result["e2e_ttft"])
+
+    rows = []
+    if ctx_pp_speeds:
+        test_name = f"ctx_pp @ d{depth}"
+        rows.append([
+            display_name,
+            test_name,
+            format_result(ctx_pp_speeds),
+            format_result(ctx_ttfr_values, 1000),
+            format_result(ctx_est_ppt_values, 1000),
+            format_result(ctx_e2e_ttft_values, 1000)
+        ])
+
+    if ctx_tg_speeds:
+        test_name = f"ctx_tg @ d{depth}"
+        rows.append([display_name, test_name, format_result(ctx_tg_speeds), "", "", ""])
+
+    if pp_speeds:
+        test_name = f"pp{pp}"
+        if depth > 0:
+            test_name += f" @ d{depth}"
+        rows.append([
+            display_name,
+            test_name,
+            format_result(pp_speeds),
+            format_result(ttfr_values, 1000),
+            format_result(est_ppt_values, 1000),
+            format_result(e2e_ttft_values, 1000)
+        ])
+
+    if tg_speeds:
+        test_name = f"tg{tg}"
+        if depth > 0:
+            test_name += f" @ d{depth}"
+        rows.append([display_name, test_name, format_result(tg_speeds), "", "", ""])
+
+    return rows
+
+
+async def run_concurrent_batch(session, base_url, api_key, model_name,
+        all_tokens, tokenizer, pp, tg, depth, concurrency,
+        no_cache, latency, post_run_cmd, adapt_prompt, delta_user, delta_context):
+    prompts = []
+    expected_tokens_list = []
+    for _ in range(concurrency):
+        current_pp, current_depth = adapt_token_counts(pp, depth, adapt_prompt, delta_user, delta_context)
+        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, no_cache)
+        prompts.append((context, prompt))
+        expected_tokens_list.append(current_pp + current_depth)
+
+    tasks = [
+        run_benchmark(session, base_url, api_key, model_name,
+                      ctx, pmt, exp_tok, tg, no_cache, latency, None)
+        for (ctx, pmt), exp_tok in zip(prompts, expected_tokens_list)
+    ]
+
+    wall_start = time.perf_counter()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    wall_end = time.perf_counter()
+
+    if post_run_cmd:
+        try:
+            subprocess.run(post_run_cmd, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Post-run command failed: {e}")
+
+    return results, wall_start, wall_end, expected_tokens_list
+
+
+def aggregate_concurrent_results(batch_results, wall_start, wall_end, expected_tokens_list):
+    wall_time = wall_end - wall_start
+    if wall_time <= 0:
+        wall_time = 0.0001
+
+    successful = []
+    successful_expected_pp = []
+    failed = 0
+    for r, exp_pp in zip(batch_results, expected_tokens_list):
+        if isinstance(r, Exception) or r is None:
+            failed += 1
+        else:
+            successful.append(r)
+            successful_expected_pp.append(exp_pp)
+
+    total_pp_tokens = sum(successful_expected_pp)
+    total_tg_tokens = sum(
+        max(0, r.get("token_count", 0) - 1)
+        for r in successful
+        if r.get("tg_speed") is not None
+    )
+
+    agg_pp_tps = total_pp_tokens / wall_time
+    agg_tg_tps = total_tg_tokens / wall_time
+    req_per_sec = len(successful) / wall_time
+
+    e2e_ttft_values = [r["e2e_ttft"] for r in successful if r.get("e2e_ttft") is not None]
+
+    return {
+        "agg_pp_tps": agg_pp_tps,
+        "agg_tg_tps": agg_tg_tps,
+        "req_per_sec": req_per_sec,
+        "e2e_ttft_values": e2e_ttft_values,
+        "failed": failed,
+        "successful": len(successful),
+    }
+
+
 async def main_async():
     args = parse_arguments()
     
     if args.enable_prefix_caching and args.no_cache:
         print("Error: --enable-prefix-caching and --no-cache are incompatible.")
         return
+
+    args.concurrency = sorted(set(max(1, c) for c in args.concurrency))
 
     version_number = __version__
 
@@ -403,7 +596,7 @@ async def main_async():
     
     # Use a large timeout for long-running benchmarks
     timeout = aiohttp.ClientTimeout(total=3600)
-    connector = aiohttp.TCPConnector(limit=1, force_close=False, keepalive_timeout=600)
+    connector = aiohttp.TCPConnector(limit=max(args.concurrency), force_close=False, keepalive_timeout=600)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector, trust_env=True) as session:
         delta_user = 0
         delta_context = 0
@@ -416,132 +609,101 @@ async def main_async():
 
         latency = await measure_latency(session, args.base_url, args.api_key, args.latency_mode, served_model_name)
         
+        has_concurrent = any(c > 1 for c in args.concurrency)
+        if has_concurrent and args.enable_prefix_caching:
+            print("Warning: --enable-prefix-caching is not supported with concurrency > 1. Prefix caching tests will only run at concurrency 1.")
+        if has_concurrent and not args.no_cache and not args.enable_prefix_caching:
+            print("Warning: Running concurrent tests without --no-cache. Server-side KV cache may inflate throughput numbers. Use --no-cache for reliable results.")
+
         results = []
-        
+        concurrent_results = []
+
         for depth in args.depth:
             for pp in args.pp:
                 for tg in args.tg:
-                    print(f"Running test: pp={pp}, tg={tg}, depth={depth}")
-                    pp_speeds = []
-                    tg_speeds = []
-                    ttft_values = []
-                    ttfr_values = []
-                    est_ppt_values = []
-                    e2e_ttft_values = []
-                    
-                    ctx_pp_speeds = []
-                    ctx_tg_speeds = []
-                    ctx_ttfr_values = []
-                    ctx_est_ppt_values = []
-                    ctx_e2e_ttft_values = []
-                    
-                    for run in range(args.runs):
-                        current_pp = pp
-                        current_depth = depth
-                        if args.adapt_prompt:
-                            if depth == 0:
-                                current_pp = max(1, pp - delta_user)
-                            else:
-                                current_depth = max(1, depth - delta_context)
+                    for c in args.concurrency:
+                        if c == 1:
+                            rows = await run_serial_test(
+                                session, args.base_url, args.api_key, served_model_name,
+                                all_tokens, tokenizer, pp, tg, depth, args.runs,
+                                args.no_cache, latency, args.post_run_cmd,
+                                args.adapt_prompt, delta_user, delta_context,
+                                args.enable_prefix_caching,
+                                display_model_name=args.model)
+                            results.extend(rows)
 
-                        context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, args.no_cache)
-                        
-                        if args.enable_prefix_caching and depth > 0:
-                            # Request 1: Context only
-                            # We send context as system message, and empty prompt as user message.
-                            # This establishes the prefix: [System: Context] [User: ""]
-                            # Expected PP tokens = current_depth (context size)
-                            print(f"  Run {run+1}/{args.runs} (Context Load)...")
-                            ctx_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, "", current_depth, tg, args.no_cache, latency, None)
-                            
-                            if ctx_result:
-                                if ctx_result["pp_speed"] is not None:
-                                    ctx_pp_speeds.append(ctx_result["pp_speed"])
-                                if ctx_result["tg_speed"] is not None:
-                                    ctx_tg_speeds.append(ctx_result["tg_speed"])
-                                if ctx_result["ttfr"] is not None:
-                                    ctx_ttfr_values.append(ctx_result["ttfr"])
-                                if ctx_result["est_ppt"] is not None:
-                                    ctx_est_ppt_values.append(ctx_result["est_ppt"])
-                                if ctx_result["e2e_ttft"] is not None:
-                                    ctx_e2e_ttft_values.append(ctx_result["e2e_ttft"])
-                            
-                            # Request 2: Context + Prompt
-                            # We send context as system message, and prompt as user message.
-                            # The prefix [System: Context] should be cached.
-                            # Expected PP tokens = current_pp (prompt size only)
-                            print(f"  Run {run+1}/{args.runs} (Inference)...")
-                            run_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, prompt, current_pp, tg, args.no_cache, latency, args.post_run_cmd)
                         else:
-                            # Standard run
-                            # Expected PP tokens = current_pp + current_depth
-                            expected_tokens = current_pp + current_depth
-                            run_result = await run_benchmark(session, args.base_url, args.api_key, served_model_name, context, prompt, expected_tokens, tg, args.no_cache, latency, args.post_run_cmd)
-                        
-                        if run_result:
-                            if run_result["tg_speed"] is not None:
-                                tg_speeds.append(run_result["tg_speed"])
-                            if run_result["pp_speed"] is not None:
-                                pp_speeds.append(run_result["pp_speed"])
-                            if run_result["est_ppt"] is not None:
-                                est_ppt_values.append(run_result["est_ppt"])
-                            if run_result["ttfr"] is not None:
-                                ttfr_values.append(run_result["ttfr"])
-                            if run_result["ttft"] is not None:
-                                ttft_values.append(run_result["ttft"])
-                            if run_result["e2e_ttft"] is not None:
-                                e2e_ttft_values.append(run_result["e2e_ttft"])
+                            # Concurrent path
+                            print(f"Running concurrent test: pp={pp}, tg={tg}, depth={depth}, concurrency={c}")
+                            batch_agg_pp = []
+                            batch_agg_tg = []
+                            batch_req_per_sec = []
+                            batch_e2e_ttft_means = []
+                            batch_e2e_ttft_all = []
+                            batch_failed = 0
 
-                    # Aggregate results
-                    def format_result(values, multiplier=1.0):
-                        if not values: return ""
-                        mean = np.mean(values) * multiplier
-                        std = np.std(values) * multiplier
-                        return f"{mean:.2f} ± {std:.2f}"
+                            for run in range(args.runs):
+                                print(f"  Batch {run+1}/{args.runs} (concurrency={c})...")
+                                batch_results, wall_start, wall_end, expected_tokens_list = await run_concurrent_batch(
+                                    session, args.base_url, args.api_key, served_model_name,
+                                    all_tokens, tokenizer, pp, tg, depth, c,
+                                    args.no_cache, latency, args.post_run_cmd,
+                                    args.adapt_prompt, delta_user, delta_context)
 
-                    # Context PP (if enabled)
-                    if ctx_pp_speeds:
-                        test_name = f"ctx_pp @ d{depth}"
-                        results.append([
-                            args.model, 
-                            test_name, 
-                            format_result(ctx_pp_speeds), 
-                            format_result(ctx_ttfr_values, 1000), 
-                            format_result(ctx_est_ppt_values, 1000), 
-                            format_result(ctx_e2e_ttft_values, 1000)
-                        ])
+                                agg = aggregate_concurrent_results(batch_results, wall_start, wall_end, expected_tokens_list)
+                                batch_agg_pp.append(agg["agg_pp_tps"])
+                                batch_agg_tg.append(agg["agg_tg_tps"])
+                                batch_req_per_sec.append(agg["req_per_sec"])
+                                if agg["e2e_ttft_values"]:
+                                    batch_e2e_ttft_means.append(np.mean(agg["e2e_ttft_values"]))
+                                batch_e2e_ttft_all.extend(agg["e2e_ttft_values"])
+                                batch_failed += agg["failed"]
 
-                    # Context TG (if enabled)
-                    if ctx_tg_speeds:
-                        test_name = f"ctx_tg @ d{depth}"
-                        results.append([args.model, test_name, format_result(ctx_tg_speeds), "", "", ""])
+                            test_name = f"pp{pp}/tg{tg} x{c}"
+                            if depth > 0: test_name += f" @ d{depth}"
 
-                    # Standard PP
-                    if pp_speeds:
-                        test_name = f"pp{pp}"
-                        if depth > 0: test_name += f" @ d{depth}"
-                        results.append([
-                            args.model, 
-                            test_name, 
-                            format_result(pp_speeds), 
-                            format_result(ttfr_values, 1000), 
-                            format_result(est_ppt_values, 1000), 
-                            format_result(e2e_ttft_values, 1000)
-                        ])
-                    
-                    # Standard TG
-                    if tg_speeds:
-                        test_name = f"tg{tg}"
-                        if depth > 0: test_name += f" @ d{depth}"
-                        results.append([args.model, test_name, format_result(tg_speeds), "", "", ""])
+                            avg_e2e = format_result(batch_e2e_ttft_means, 1000) if batch_e2e_ttft_means else ""
+                            p99_e2e = ""
+                            if batch_e2e_ttft_all:
+                                n = len(batch_e2e_ttft_all)
+                                if n >= 20:
+                                    p99_val = np.percentile(batch_e2e_ttft_all, 99) * 1000
+                                    p99_e2e = f"{p99_val:.2f}"
+                                else:
+                                    max_val = max(batch_e2e_ttft_all) * 1000
+                                    p99_e2e = f"{max_val:.2f} (max)"
+
+                            concurrent_results.append([
+                                args.model,
+                                test_name,
+                                format_result(batch_agg_pp),
+                                format_result(batch_agg_tg),
+                                format_result(batch_req_per_sec),
+                                avg_e2e,
+                                p99_e2e,
+                                str(batch_failed)
+                            ])
 
         print()
-        if not results:
+        if not results and not concurrent_results:
             print("No results collected. Check if the model is generating tokens.")
-        else:
+
+        if results:
             print(tabulate(results, headers=["model", "test", "t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right")))
+
+        if concurrent_results:
+            if results:
+                print()
+            print("Concurrent throughput results:")
+            print(tabulate(concurrent_results, headers=["model", "test", "pp agg t/s", "tg agg t/s", "req/s", "avg e2e_ttft (ms)", "p99 e2e_ttft (ms)", "errors"], tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right")))
+
+        if results or concurrent_results:
             print(f"\nllama-benchy ({version_number})")
-            print(f"date: {current_time} | latency mode: {args.latency_mode}")
+            concurrency_str = ""
+            if has_concurrent:
+                levels = sorted(c for c in args.concurrency if c > 1)
+                concurrency_str = f" | concurrency: {','.join(str(c) for c in levels)}"
+            print(f"date: {current_time} | latency mode: {args.latency_mode}{concurrency_str}")
 
 
 def main():
