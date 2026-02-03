@@ -504,26 +504,71 @@ async def run_serial_test(session, base_url, api_key, model_name,
     return rows
 
 
+async def _run_prefix_cached_slot(session, base_url, api_key, model_name,
+        context, prompt, current_depth, current_pp, tg, no_cache, latency):
+    """Run a two-step prefix caching sequence for a single concurrent slot."""
+    ctx_result = await run_benchmark(session, base_url, api_key, model_name,
+        context, "", current_depth, tg, no_cache, latency, None)
+    inf_result = await run_benchmark(session, base_url, api_key, model_name,
+        context, prompt, current_pp, tg, no_cache, latency, None)
+    return ctx_result, inf_result
+
+
 async def run_concurrent_batch(session, base_url, api_key, model_name,
         all_tokens, tokenizer, pp, tg, depth, concurrency,
-        no_cache, latency, post_run_cmd, adapt_prompt, delta_user, delta_context):
+        no_cache, latency, post_run_cmd, adapt_prompt, delta_user, delta_context,
+        enable_prefix_caching=False):
     prompts = []
     expected_tokens_list = []
+    ctx_expected_tokens_list = None
     for _ in range(concurrency):
         current_pp, current_depth = adapt_token_counts(pp, depth, adapt_prompt, delta_user, delta_context)
         context, prompt = generate_prompt(all_tokens, tokenizer, current_pp, current_depth, no_cache)
-        prompts.append((context, prompt))
-        expected_tokens_list.append(current_pp + current_depth)
+        prompts.append((context, prompt, current_pp, current_depth))
+        if enable_prefix_caching and depth > 0:
+            if ctx_expected_tokens_list is None:
+                ctx_expected_tokens_list = []
+            ctx_expected_tokens_list.append(current_depth)
+        else:
+            expected_tokens_list.append(current_pp + current_depth)
 
-    tasks = [
-        run_benchmark(session, base_url, api_key, model_name,
-                      ctx, pmt, exp_tok, tg, no_cache, latency, None)
-        for (ctx, pmt), exp_tok in zip(prompts, expected_tokens_list)
-    ]
+    if enable_prefix_caching and depth > 0:
+        tasks = [
+            _run_prefix_cached_slot(session, base_url, api_key, model_name,
+                                    ctx, pmt, current_depth, current_pp, tg, no_cache, latency)
+            for (ctx, pmt, current_pp, current_depth) in prompts
+        ]
 
-    wall_start = time.perf_counter()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    wall_end = time.perf_counter()
+        wall_start = time.perf_counter()
+        slot_results = await asyncio.gather(*tasks, return_exceptions=True)
+        wall_end = time.perf_counter()
+
+        # Unzip (ctx_result, inf_result) tuples
+        ctx_results = []
+        inf_results = []
+        for r in slot_results:
+            if isinstance(r, Exception):
+                ctx_results.append(r)
+                inf_results.append(r)
+            else:
+                ctx_results.append(r[0])
+                inf_results.append(r[1])
+
+        # For inference, expected tokens is just current_pp (context is cached)
+        inf_expected_tokens_list = [current_pp for (_, _, current_pp, _) in prompts]
+    else:
+        tasks = [
+            run_benchmark(session, base_url, api_key, model_name,
+                          ctx, pmt, exp_tok, tg, no_cache, latency, None)
+            for (ctx, pmt, _, _), exp_tok in zip(prompts, expected_tokens_list)
+        ]
+
+        wall_start = time.perf_counter()
+        inf_results = await asyncio.gather(*tasks, return_exceptions=True)
+        wall_end = time.perf_counter()
+
+        ctx_results = None
+        inf_expected_tokens_list = expected_tokens_list
 
     if post_run_cmd:
         try:
@@ -531,7 +576,7 @@ async def run_concurrent_batch(session, base_url, api_key, model_name,
         except subprocess.CalledProcessError as e:
             print(f"Post-run command failed: {e}")
 
-    return results, wall_start, wall_end, expected_tokens_list
+    return inf_results, ctx_results, wall_start, wall_end, inf_expected_tokens_list, ctx_expected_tokens_list
 
 
 def aggregate_concurrent_results(batch_results, wall_start, wall_end, expected_tokens_list):
@@ -610,8 +655,6 @@ async def main_async():
         latency = await measure_latency(session, args.base_url, args.api_key, args.latency_mode, served_model_name)
         
         has_concurrent = any(c > 1 for c in args.concurrency)
-        if has_concurrent and args.enable_prefix_caching:
-            print("Warning: --enable-prefix-caching is not supported with concurrency > 1. Prefix caching tests will only run at concurrency 1.")
         if has_concurrent and not args.no_cache and not args.enable_prefix_caching:
             print("Warning: Running concurrent tests without --no-cache. Server-side KV cache may inflate throughput numbers. Use --no-cache for reliable results.")
 
@@ -642,15 +685,27 @@ async def main_async():
                             batch_e2e_ttft_all = []
                             batch_failed = 0
 
+                            ctx_batch_agg_pp = []
+                            ctx_batch_agg_tg = []
+                            ctx_batch_req_per_sec = []
+                            ctx_batch_e2e_ttft_means = []
+                            ctx_batch_e2e_ttft_all = []
+                            ctx_batch_failed = 0
+
                             for run in range(args.runs):
                                 print(f"  Batch {run+1}/{args.runs} (concurrency={c})...")
-                                batch_results, wall_start, wall_end, expected_tokens_list = await run_concurrent_batch(
+                                inf_results, ctx_results, wall_start, wall_end, inf_expected_tokens_list, ctx_expected_tokens_list = await run_concurrent_batch(
                                     session, args.base_url, args.api_key, served_model_name,
                                     all_tokens, tokenizer, pp, tg, depth, c,
                                     args.no_cache, latency, args.post_run_cmd,
-                                    args.adapt_prompt, delta_user, delta_context)
+                                    args.adapt_prompt, delta_user, delta_context,
+                                    enable_prefix_caching=args.enable_prefix_caching)
 
-                                agg = aggregate_concurrent_results(batch_results, wall_start, wall_end, expected_tokens_list)
+                                # Note: wall_start/wall_end span the entire two-step flow (context load + inference)
+                                # because both phases run serially within each slot but concurrently across slots.
+                                # The aggregate throughput numbers therefore reflect end-to-end server load
+                                # inclusive of both phases, which is a realistic throughput metric.
+                                agg = aggregate_concurrent_results(inf_results, wall_start, wall_end, inf_expected_tokens_list)
                                 batch_agg_pp.append(agg["agg_pp_tps"])
                                 batch_agg_tg.append(agg["agg_tg_tps"])
                                 batch_req_per_sec.append(agg["req_per_sec"])
@@ -658,6 +713,43 @@ async def main_async():
                                     batch_e2e_ttft_means.append(np.mean(agg["e2e_ttft_values"]))
                                 batch_e2e_ttft_all.extend(agg["e2e_ttft_values"])
                                 batch_failed += agg["failed"]
+
+                                if ctx_results is not None:
+                                    ctx_agg = aggregate_concurrent_results(ctx_results, wall_start, wall_end, ctx_expected_tokens_list)
+                                    ctx_batch_agg_pp.append(ctx_agg["agg_pp_tps"])
+                                    ctx_batch_agg_tg.append(ctx_agg["agg_tg_tps"])
+                                    ctx_batch_req_per_sec.append(ctx_agg["req_per_sec"])
+                                    if ctx_agg["e2e_ttft_values"]:
+                                        ctx_batch_e2e_ttft_means.append(np.mean(ctx_agg["e2e_ttft_values"]))
+                                    ctx_batch_e2e_ttft_all.extend(ctx_agg["e2e_ttft_values"])
+                                    ctx_batch_failed += ctx_agg["failed"]
+
+                            # Add ctx row if prefix caching was active
+                            if ctx_batch_agg_pp:
+                                ctx_test_name = f"ctx pp{pp}/tg{tg} x{c}"
+                                if depth > 0: ctx_test_name += f" @ d{depth}"
+
+                                ctx_avg_e2e = format_result(ctx_batch_e2e_ttft_means, 1000) if ctx_batch_e2e_ttft_means else ""
+                                ctx_p99_e2e = ""
+                                if ctx_batch_e2e_ttft_all:
+                                    n = len(ctx_batch_e2e_ttft_all)
+                                    if n >= 20:
+                                        p99_val = np.percentile(ctx_batch_e2e_ttft_all, 99) * 1000
+                                        ctx_p99_e2e = f"{p99_val:.2f}"
+                                    else:
+                                        max_val = max(ctx_batch_e2e_ttft_all) * 1000
+                                        ctx_p99_e2e = f"{max_val:.2f} (max)"
+
+                                concurrent_results.append([
+                                    args.model,
+                                    ctx_test_name,
+                                    format_result(ctx_batch_agg_pp),
+                                    format_result(ctx_batch_agg_tg),
+                                    format_result(ctx_batch_req_per_sec),
+                                    ctx_avg_e2e,
+                                    ctx_p99_e2e,
+                                    str(ctx_batch_failed)
+                                ])
 
                             test_name = f"pp{pp}/tg{tg} x{c}"
                             if depth > 0: test_name += f" @ d{depth}"
