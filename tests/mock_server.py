@@ -98,6 +98,8 @@ async def list_models():
 @app.post("/chat/completions")
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
+    start_proc_time = time.perf_counter()
+
     # Analyze messages for token counting and prefix caching logic
     system_tokens = 0
     user_tokens = 0
@@ -123,11 +125,16 @@ async def chat_completions(request: ChatCompletionRequest):
     total_prompt_tokens = system_tokens + user_tokens + other_tokens
     
     # Emulate Prompt Processing Logic
-    # If both system and user are provided, system content processing is cached.
     tokens_to_process = total_prompt_tokens
-    if has_system and has_user:
-        tokens_to_process = user_tokens + other_tokens
     
+    if has_system:
+        if user_tokens > 0:
+            # Case: System + User (with content) -> System cached, User processed + lookup overhead
+            tokens_to_process = user_tokens + other_tokens + 1
+        else:
+            # Case: System + User (empty) -> Context preload / Warmup -> Full System processing
+            tokens_to_process = total_prompt_tokens
+            
     if request.cache_prompt is False:
         tokens_to_process = total_prompt_tokens
 
@@ -144,19 +151,25 @@ async def chat_completions(request: ChatCompletionRequest):
     # Log the decision for debugging
     logger.info(f"Model: {request.model}, Prompt Tokens: {total_prompt_tokens} (Sys: {system_tokens}, User: {user_tokens}), Delay tokens: {tokens_to_process}, Delay: {prompt_delay:.4f}s")
     
-    # Simulate Prompt Processing Delay
-    if prompt_delay > 0:
-        await asyncio.sleep(prompt_delay)
+    # Simulate Prompt Processing Delay using drift correction
+    # Account for time spent in token counting and logic
+    elapsed_proc = time.perf_counter() - start_proc_time
+    adjusted_prompt_delay = max(0.0, prompt_delay - elapsed_proc)
     
-    # We generate "mock " repeating.
-    # Note: "mock " is 5 chars. If count_tokens is len//4, "mock " is 1 token.
-    # This is consistent.
+    if adjusted_prompt_delay > 0:
+        await asyncio.sleep(adjusted_prompt_delay)
     
     if request.stream:
         async def event_generator():
             # Generate tokens
+            stream_start_time = time.perf_counter()
             for i in range(num_completion_tokens):
-                await asyncio.sleep(token_interval)
+                target_time = stream_start_time + ((i + 1) * token_interval)
+                now = time.perf_counter()
+                sleep_duration = target_time - now
+                
+                if sleep_duration > 0:
+                    await asyncio.sleep(sleep_duration)
                 
                 token_text = "mock "
                 chunk = {
