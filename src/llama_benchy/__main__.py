@@ -20,7 +20,7 @@ async def main_async():
     print(f"llama-benchy ({__version__})")
     print(f"Date: {current_time}")
     print(f"Benchmarking model: {config.model} at {config.base_url}")
-    print(f"Concurrency: {config.concurrency}")
+    print(f"Concurrency levels: {config.concurrency_levels}")
 
     # 3. Prepare Data
     corpus = TokenizedCorpus(config.book_url, config.tokenizer, config.model)

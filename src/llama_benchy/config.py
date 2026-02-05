@@ -22,7 +22,7 @@ class BenchmarkConfig:
     enable_prefix_caching: bool
     book_url: str
     post_run_cmd: Optional[str]
-    concurrency: int = 1
+    concurrency_levels: List[int]
     save_result: Optional[str] = None
     result_format: str = "md"
 
@@ -47,7 +47,7 @@ class BenchmarkConfig:
         parser.add_argument("--adapt-prompt", action="store_true", default=True, help="Adapt prompt size based on warmup token usage delta (default: True)")
         parser.add_argument("--no-adapt-prompt", action="store_false", dest="adapt_prompt", help="Disable prompt size adaptation")
         parser.add_argument("--enable-prefix-caching", action="store_true", help="Enable prefix caching performance measurement")
-        parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent requests per test - default: 1")
+        parser.add_argument("--concurrency", type=int, nargs='+', default=[1], help="List of concurrency levels (number of concurrent requests per test) - default: [1]")
         parser.add_argument("--save-result", type=str, help="File to save results to")
         parser.add_argument("--format", type=str, default="md", choices=["md", "json", "csv"], help="Output format")
           
@@ -70,7 +70,7 @@ class BenchmarkConfig:
             enable_prefix_caching=args.enable_prefix_caching,
             book_url=args.book_url,
             post_run_cmd=args.post_run_cmd,
-            concurrency=args.concurrency,
+            concurrency_levels=args.concurrency,
             save_result=args.save_result,
             result_format=args.format
         )

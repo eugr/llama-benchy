@@ -203,12 +203,13 @@ class BenchmarkResults:
     def _generate_rows(self) -> List[Dict[str, Any]]:
         rows = []
         for run in self.runs:
+            c_suffix = f" (c{run.concurrency})"
             if run.is_context_prefill_phase:
                 # Context Phase Prompt Processing
                 if run.pp_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"ctx_pp @ d{run.context_size}",
+                        "test_name": f"ctx_pp @ d{run.context_size}{c_suffix}",
                         "t_s": run.pp_throughput,
                         "t_s_req": run.pp_req_throughput,
                         "ttfr": run.ttfr,
@@ -220,7 +221,7 @@ class BenchmarkResults:
                 if run.tg_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"ctx_tg @ d{run.context_size}",
+                        "test_name": f"ctx_tg @ d{run.context_size}{c_suffix}",
                         "t_s": run.tg_throughput,
                         "t_s_req": run.tg_req_throughput,
                         "ttfr": None,
@@ -235,7 +236,7 @@ class BenchmarkResults:
                 if run.pp_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"pp{run.prompt_size}{d_suffix}",
+                        "test_name": f"pp{run.prompt_size}{d_suffix}{c_suffix}",
                         "t_s": run.pp_throughput,
                         "t_s_req": run.pp_req_throughput,
                         "ttfr": run.ttfr,
@@ -247,7 +248,7 @@ class BenchmarkResults:
                 if run.tg_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"tg{run.response_size}{d_suffix}",
+                        "test_name": f"tg{run.response_size}{d_suffix}{c_suffix}",
                         "t_s": run.tg_throughput,
                         "t_s_req": run.tg_req_throughput,
                         "ttfr": None,
