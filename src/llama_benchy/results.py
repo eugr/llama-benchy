@@ -12,6 +12,7 @@ from .client import RequestResult
 class BenchmarkMetric:
     mean: float
     std: float
+    values: List[float]
 
 @dataclass
 class BenchmarkMetadata:
@@ -49,9 +50,11 @@ class BenchmarkResults:
     def _calculate_metric(self, values: List[float], multiplier: float = 1.0) -> Optional[BenchmarkMetric]:
         if not values:
             return None
+        scaled_values = [v * multiplier for v in values]
         return BenchmarkMetric(
             mean=np.mean(values) * multiplier,
-            std=np.std(values) * multiplier
+            std=np.std(values) * multiplier,
+            values=scaled_values
         )
 
     def add(self, 
