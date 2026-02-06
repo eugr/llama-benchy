@@ -135,12 +135,12 @@ class BenchmarkRunner:
 
                             # Aggregate and Record
                             if self.config.enable_prefix_caching and depth > 0:
-                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True)
-                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False)
+                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_all_throughput_data=self.config.save_all_throughput_data)
+                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_all_throughput_data=self.config.save_all_throughput_data)
                             else:
                                 # Standard run expected tokens = pp + depth (usually depth=0 or concatenated)
                                 # In the loop above: expected_tokens = current_pp + current_depth
-                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False)
+                                self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_all_throughput_data=self.config.save_all_throughput_data)
 
             self.results.metadata = BenchmarkMetadata(
                 version=__version__,

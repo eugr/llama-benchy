@@ -41,6 +41,7 @@ class BenchmarkRun:
     ttfr: Optional[BenchmarkMetric]
     est_ppt: Optional[BenchmarkMetric]
     e2e_ttft: Optional[BenchmarkMetric]
+    throughput_over_time: Optional[List[List[float]]] = None
 
 class BenchmarkResults:
     def __init__(self):
@@ -58,20 +59,32 @@ class BenchmarkResults:
             values=scaled_values
         )
 
-    def _calculate_peak_throughput(self, all_timestamps: List[float], window: float = 1.0) -> float:
+    def _calculate_peak_throughput(self, all_timestamps: List[float], window: float = 1.0, return_series: bool = False) -> Any:
         if not all_timestamps:
-            return 0.0
+            return (0.0, []) if return_series else 0.0
         
         all_timestamps.sort()
         
         # If total duration is less than the window, use actual duration to calculate rate
         # This handles short bursts correctly where Peak would otherwise be < Mean
         total_duration = all_timestamps[-1] - all_timestamps[0]
+        peak = 0.0
         if total_duration < window and total_duration > 0:
-             return len(all_timestamps) / total_duration
+             peak = len(all_timestamps) / total_duration
+             if not return_series:
+                 return peak
+             # If returning series, we should probably generate a flat series or just one point?
+             # For now, let's proceed with sliding window calculation to fill the series, 
+             # but use the adjusted peak if it's higher (it probably is). 
+             # Actually, if duration < window, the loop below will just find max_tokens = len(all_timestamps)
+             # and return len/window, which is smaller than len/duration.
+             # So we must use the adjusted peak.
 
         max_tokens = 0
+        series = []
         
+        start_time = all_timestamps[0] if all_timestamps else 0
+
         start_idx = 0
         for end_idx, end_time in enumerate(all_timestamps):
             # Window starts at end_time - window
@@ -82,8 +95,22 @@ class BenchmarkResults:
             current_tokens = end_idx - start_idx + 1
             if current_tokens > max_tokens:
                 max_tokens = current_tokens
-                
-        return float(max_tokens) / window
+            
+            if return_series:
+                series.append([end_time - start_time, float(current_tokens) / window])
+        
+        calculated_peak = float(max_tokens) / window
+
+        # If we had a short burst adjustment
+        if total_duration < window and total_duration > 0:
+             # Just use the adjusted peak as the result
+             final_peak = peak
+        else:
+             final_peak = calculated_peak
+             
+        if return_series:
+            return final_peak, series
+        return final_peak
 
     def add(self, 
             model: str, 
@@ -94,7 +121,8 @@ class BenchmarkResults:
             run_results: List[List[RequestResult]], # List of batches (one batch per run)
             latency: float, 
             expected_pp_tokens: int,
-            is_context_phase: bool = False):
+            is_context_phase: bool = False,
+            save_all_throughput_data: bool = False):
         
         if self.model_name is None:
             self.model_name = model
@@ -110,6 +138,8 @@ class BenchmarkResults:
         agg_batch_pp_throughputs = []
         agg_batch_tg_throughputs = []
         agg_peak_throughputs = []
+        
+        agg_throughput_series = []
 
         for batch in run_results:
             self._process_batch(
@@ -124,7 +154,9 @@ class BenchmarkResults:
                 agg_e2e_ttft_values, 
                 agg_batch_pp_throughputs, 
                 agg_batch_tg_throughputs,
-                agg_peak_throughputs
+                agg_peak_throughputs,
+                save_all_throughput_data=save_all_throughput_data,
+                agg_throughput_series=agg_throughput_series
             )
 
         # Calculate metrics for BenchmarkRun
@@ -153,7 +185,8 @@ class BenchmarkResults:
             peak_throughput=run_metric_peak_throughput,
             ttfr=run_metric_ttfr,
             est_ppt=run_metric_est_ppt,
-            e2e_ttft=run_metric_e2e_ttft
+            e2e_ttft=run_metric_e2e_ttft,
+            throughput_over_time=agg_throughput_series if save_all_throughput_data else None
         ))
 
     def _process_batch(self, 
@@ -168,7 +201,9 @@ class BenchmarkResults:
                        agg_e2e_ttft_values: List[float],
                        agg_batch_pp_throughputs: List[float],
                        agg_batch_tg_throughputs: List[float],
-                       agg_peak_throughputs: List[float]):
+                       agg_peak_throughputs: List[float],
+                       save_all_throughput_data: bool = False,
+                       agg_throughput_series: Optional[List[List[float]]] = None):
         
         valid_results = [r for r in results if r and not r.error]
         if not valid_results:
@@ -262,8 +297,14 @@ class BenchmarkResults:
                      agg_batch_tg_throughputs.append(batch_tg_throughput)
 
         if all_token_timestamps:
-            peak = self._calculate_peak_throughput(all_token_timestamps)
-            agg_peak_throughputs.append(peak)
+            res = self._calculate_peak_throughput(all_token_timestamps, return_series=save_all_throughput_data)
+            if save_all_throughput_data:
+                peak, series = res
+                agg_peak_throughputs.append(peak)
+                if agg_throughput_series is not None:
+                    agg_throughput_series.append(series)
+            else:
+                agg_peak_throughputs.append(res)
 
 
     def _generate_rows(self) -> List[Dict[str, Any]]:

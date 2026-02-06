@@ -72,3 +72,4 @@ coverage.xml
 *.swp
 *.swo
 *~
+examples/*.json
