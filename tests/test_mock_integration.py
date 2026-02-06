@@ -1,5 +1,6 @@
 import json
 import asyncio
+import sys
 import time
 import subprocess
 import uvicorn
@@ -61,7 +62,7 @@ async def test_benchy_integration(mock_server_url):
     # We use subprocess to run the CLI tool exactly as a user would
     # Using JSON output format for reliable parsing
     cmd = [
-        "uv", "run", "llama-benchy",
+        sys.executable, "-m", "llama_benchy",
         "--base-url", mock_server_url,
         "--model", "test-model",
         "--depth", "0", "4096",
