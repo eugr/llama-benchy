@@ -8,6 +8,9 @@ import sys
 
 from .client import RequestResult
 
+# Type alias for a time series: List of [timestamp, value] pairs
+TimeSeries = List[List[float]]
+
 @dataclass
 class BenchmarkMetric:
     mean: float
@@ -42,8 +45,12 @@ class BenchmarkRun:
     ttfr: Optional[BenchmarkMetric]
     est_ppt: Optional[BenchmarkMetric]
     e2e_ttft: Optional[BenchmarkMetric]
-    throughput_over_time: Optional[List[List[float]]] = None
-    requests_throughput_over_time: Optional[List[List[List[List[float]]]]] = None
+    
+    # List of time series, one per run (aggregated across all requests in that run)
+    throughput_over_time: Optional[List[TimeSeries]] = None
+    
+    # List of lists of time series, one list per run, containing one time series per request
+    requests_throughput_over_time: Optional[List[List[TimeSeries]]] = None
 
 class BenchmarkResults:
     def __init__(self):
@@ -216,8 +223,8 @@ class BenchmarkResults:
                        agg_peak_req_throughputs: List[float],
                        save_total_throughput_timeseries: bool = False,
                        save_all_throughput_timeseries: bool = False,
-                       agg_throughput_series: Optional[List[List[float]]] = None,
-                       agg_req_throughput_series: Optional[List[List[List[float]]]] = None):
+                       agg_throughput_series: Optional[List[TimeSeries]] = None,
+                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None):
         
         valid_results = [r for r in results if r and not r.error]
         if not valid_results:
