@@ -30,7 +30,7 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 - Configurable latency measurement mode.
 - Supports concurrent requests (`--concurrency`) to measure throughput under load.
 - Can save results to file in Markdown, JSON, or CSV format.
-- Can save granular time-series data for token generation when JSON output is used (`--save-all-throughput-data`).
+- Can save granular time-series data for token generation when JSON output is used (`--save-total-throughput-timeseries` and `--save-total-throughput-timeseries`).
 
 # Current Limitations
 
