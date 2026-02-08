@@ -450,14 +450,13 @@ class BenchmarkResults:
                 row["test_name"], 
                 fmt(row["t_s"]),
                 fmt(row["peak_ts"]),
-                fmt(row["peak_ts_req"]),
                 fmt(row["ttfr"]), 
                 fmt(row["est_ppt"]), 
                 fmt(row["e2e_ttft"])
             ] for row in rows]
-            headers = ["model", "test", ts_header, "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
 
-        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right", "right"))
+        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right"))
 
     def save_report(self, filename: Optional[str], format: str, concurrency: int = 1):
         msg = ""
