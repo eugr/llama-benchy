@@ -171,9 +171,9 @@ class LLMClient:
                                 json_str = line[5:].strip()
                                 chunk = json.loads(json_str)
 
-                                if 'usage' in chunk:
-                                    result.prompt_tokens = chunk['usage'].get('prompt_tokens', 0)
-                                
+                                if 'usage' in chunk and (chunk_usage:=chunk['usage']) is not None:
+                                    result.prompt_tokens = chunk_usage.get('prompt_tokens', 0)
+
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                     if result.first_response_ts is None:
                                         result.first_response_ts = chunk_time
