@@ -227,6 +227,18 @@ When `--enable-prefix-caching` is used (with `--depth` > 0), the script performs
 
 In this case, `pp` and `tg` speeds will show an actual prompt processing / token generation speeds for a follow up prompt with a context pre-filled.
 
+For llama.cpp-style chat workloads with a stable long user prefix, this repository also includes a local helper that sends sequential requests with the same shared prefix and small suffix changes:
+
+```bash
+./scripts/repeated_prefix_cache_test.py \
+  --base-url http://localhost:8080/v1 \
+  --model gemma4-26b-it \
+  --requests 6 \
+  --prefix-lines 219
+```
+
+The helper prints per-request wall time and token counts, then writes JSON to `results/mcp/custom-prefix-cache-<timestamp>.json`. It is useful when you want to verify that a real application-shaped prompt benefits from prefix reuse, rather than measuring the synthetic `--enable-prefix-caching` pattern.
+
 **Example**:
 
 ```bash
