@@ -216,7 +216,12 @@ class LLMClient:
 
                                 if 'usage' in chunk and chunk['usage'] is not None:
                                     result.prompt_tokens = chunk['usage'].get('prompt_tokens', 0)
-                                
+                                    # Use server-side completion_tokens when available; spec decoding
+                                    # can pack multiple tokens per SSE chunk, so chunk-counting undercounts.
+                                    completion_tokens = chunk['usage'].get('completion_tokens')
+                                    if completion_tokens is not None and completion_tokens > result.total_tokens:
+                                        result.total_tokens = completion_tokens
+
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                     if result.first_response_ts is None:
                                         result.first_response_ts = chunk_time
