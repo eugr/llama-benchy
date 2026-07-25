@@ -1,15 +1,28 @@
+import io
 import json
 
 import pytest
 
 from llama_benchy.client import RequestResult
 from llama_benchy.config import BenchmarkConfig
-from llama_benchy.progress import ProgressEmitter, SCHEMA_VERSION
+from llama_benchy.progress import ConsoleProgressBar, ProgressEmitter, SCHEMA_VERSION
 from llama_benchy.runner import BenchmarkRunner
 
 
 def _read_jsonl(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_console_progress_bar_formats_completion_and_eta():
+    stream = io.StringIO()
+    bar = ConsoleProgressBar(total_steps=3, enabled=True, stream=stream)
+
+    bar.render(1, description="Context Load", elapsed=2.0)
+
+    output = stream.getvalue()
+    assert "1/3" in output
+    assert "Context Load" in output
+    assert "ETA" in output
 
 
 def test_progress_emitter_writes_estimated_tokens_and_terminal_status(tmp_path):

@@ -11,6 +11,7 @@ from .config import BenchmarkConfig
 from .client import CONTEXT_LOAD_USER_MESSAGE, LLMClient
 from .prompts import PromptGenerator
 from .results import BenchmarkResults, BenchmarkMetadata
+from .progress import ConsoleProgressBar
 
 class BenchmarkFailure(Exception):
     pass
@@ -22,6 +23,7 @@ class BenchmarkRunner:
         self.prompt_gen = prompt_generator
         self.results = BenchmarkResults()
         self.progress = progress
+        self.console_progress: ConsoleProgressBar | None = None
         self._next_request_id = 0
 
         # We need to track deltas from warmup to adapt prompts
@@ -50,6 +52,20 @@ class BenchmarkRunner:
             )
         except Exception:
             pass
+
+    def _estimate_total_steps(self, warmup_runs: int) -> int:
+        total_steps = 0
+        for _depth in self.config.depths:
+            for _pp in self.config.pp_counts:
+                for _tg in self.config.tg_counts:
+                    for _concurrency in self.config.concurrency_levels:
+                        phase_count = 2 if self.config.enable_prefix_caching and _depth > 0 else 1
+                        total_steps += (self.config.num_runs + warmup_runs) * phase_count
+        return total_steps
+
+    def _render_progress(self, current_step: int, description: str) -> None:
+        if self.console_progress is not None:
+            self.console_progress.render(current_step, description=description)
 
     async def run_suite(self):
         # Initialize session
@@ -92,6 +108,18 @@ class BenchmarkRunner:
                         )
                     except Exception:
                         pass
+
+                warmup_runs = 0 if self.config.no_warmup else self.config.warmup_runs
+                if self.config.progress_bar:
+                    self.console_progress = ConsoleProgressBar(
+                        self._estimate_total_steps(warmup_runs),
+                        enabled=True,
+                    )
+                    self.console_progress.start()
+                else:
+                    self.console_progress = None
+
+                step_counter = 0
 
                 # Main Loop
                 for depth in self.config.depths:
@@ -136,7 +164,11 @@ class BenchmarkRunner:
 
                                     if self.config.enable_prefix_caching and depth > 0:
                                         # Phase 1: Context Load
-                                        print(f"  {run_label} (Context Load, batch size {concurrency})...")
+                                        step_counter += 1
+                                        self._render_progress(
+                                            step_counter,
+                                            f"{run_label} (Context Load, batch size {concurrency})",
+                                        )
                                         load_tasks = []
                                         for i in range(concurrency):
                                             context, _ = prompt_batch[i]
@@ -164,7 +196,11 @@ class BenchmarkRunner:
                                             raise BenchmarkFailure()
 
                                         # Phase 2: Inference
-                                        print(f"  {run_label} (Inference, batch size {concurrency})...")
+                                        step_counter += 1
+                                        self._render_progress(
+                                            step_counter,
+                                            f"{run_label} (Inference, batch size {concurrency})",
+                                        )
                                         inf_tasks = []
                                         for i in range(concurrency):
                                             context, prompt = prompt_batch[i]
@@ -193,7 +229,11 @@ class BenchmarkRunner:
 
                                     else:
                                         # Standard Run
-                                        print(f"  {run_label} (batch size {concurrency})...")
+                                        step_counter += 1
+                                        self._render_progress(
+                                            step_counter,
+                                            f"{run_label} (batch size {concurrency})",
+                                        )
                                         expected_tokens = current_pp + current_depth
                                         batch_tasks = []
                                         for i in range(concurrency):
@@ -274,3 +314,6 @@ class BenchmarkRunner:
             if isinstance(e, BenchmarkFailure):
                 sys.exit(1)
             raise
+        finally:
+            if self.console_progress is not None:
+                self.console_progress.finish()

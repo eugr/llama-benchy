@@ -23,6 +23,70 @@ from typing import IO, Optional
 SCHEMA_VERSION = "llama-benchy-progress.v1"
 
 
+class ConsoleProgressBar:
+    """Simple console progress indicator with ETA for benchmark phases."""
+
+    def __init__(self, total_steps: int, *, enabled: bool = False, stream: Optional[IO[str]] = None) -> None:
+        self.total_steps = max(0, total_steps)
+        self.enabled = enabled
+        self.stream = stream or sys.stdout
+        self._started_at: Optional[float] = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self._started_at = time.perf_counter()
+
+    def render(self, current_step: int, *, description: str = "", total_steps: Optional[int] = None, elapsed: Optional[float] = None) -> None:
+        if not self.enabled:
+            return
+
+        total = self.total_steps if total_steps is None else max(0, total_steps)
+        if total <= 0:
+            return
+
+        current = max(0, min(current_step, total))
+        if self._started_at is None:
+            self._started_at = time.perf_counter()
+
+        elapsed = time.perf_counter() - self._started_at if elapsed is None else elapsed
+        completed = max(0, current)
+        percent = (completed / total) * 100 if total else 0
+        filled_width = 24
+        filled = int((completed / total) * filled_width) if total else 0
+        bar = "[" + "=" * filled + (">" if completed < total and filled < filled_width else "") + "-" * max(0, filled_width - filled - (1 if completed < total and filled < filled_width else 0)) + "]"
+
+        if completed > 0 and elapsed > 0:
+            eta_seconds = elapsed * (total - completed) / completed
+            eta_text = self._format_duration(eta_seconds)
+        else:
+            eta_text = "--:--"
+
+        message = f"{bar} {completed}/{total} {description} | {percent:3.0f}% | ETA {eta_text}".rstrip()
+        self.stream.write("\r\033[K")
+        self.stream.write(message)
+        self.stream.flush()
+
+    def finish(self, message: Optional[str] = None) -> None:
+        if not self.enabled:
+            return
+        if message:
+            self.stream.write("\r\033[K")
+            self.stream.write(f"{message}\n")
+        else:
+            self.stream.write("\r\033[K\n")
+        self.stream.flush()
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = max(0, int(seconds))
+        minutes, sec = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+        return f"{minutes:02d}:{sec:02d}"
+
+
 class ProgressEmitter:
     """Append-only JSONL writer for benchmark progress events.
 
