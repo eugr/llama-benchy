@@ -170,7 +170,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
--   `--no-warmup`: Skip warmup phase.
+-   `--no-warmup`: Skip warmup phase. Note: since `--adapt-prompt` is enabled by default and relies on warmup to measure the token delta, warmup will still run unless you also pass `--no-adapt-prompt`.
 -   `--skip-coherence`: Skip coherence test after warmup.
 -   `--adapt-prompt`: Adapt prompt size based on warmup token usage delta (Default: True).
 -   `--no-adapt-prompt`: Disable prompt size adaptation.
