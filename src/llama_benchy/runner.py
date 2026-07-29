@@ -63,6 +63,12 @@ class BenchmarkRunner:
                 # Warmup
                 should_warmup = not self.config.no_warmup
                 if self.config.adapt_prompt:
+                    if self.config.no_warmup:
+                        print(
+                            "\n[Warning] --no-warmup was specified, but warmup will still run because "
+                            "--adapt-prompt needs it to measure the token delta; pass --no-adapt-prompt "
+                            "as well to skip warmup entirely."
+                        )
                     should_warmup = True
 
                 tokenizer = self.prompt_gen.corpus.get_tokenizer()
