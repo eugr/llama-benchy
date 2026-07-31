@@ -24,7 +24,8 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 - Reports Time To First Response (data chunk) (TTFR), Estimated Prompt Processing Time (est_ppt), and End-to-End TTFT.
 - Supports configurable prompt length (`--pp`), generation length (`--tg`), and context depth (`--depth`).
 - Can run multiple iterations (`--runs`) and report mean ± std.
-- Uses HuggingFace tokenizers for accurate token counts.
+- Loads each model's HuggingFace tokenizer assets before model configuration, including architectures newer than the installed Transformers release.
+- Fails when the requested tokenizer cannot load instead of silently substituting an unrelated tokenizer.
 - Correctly handles multi-token prediction (MTP) chunks.
 - Downloads a book from Project Gutenberg to use as source text for prompts to ensure better benchmarking of spec.decoding/MTP models.
 - Supports executing a command after each run (e.g., to clear cache).

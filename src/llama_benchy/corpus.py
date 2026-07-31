@@ -57,16 +57,12 @@ class TokenizedCorpus:
 
         try:
             return self._get_transformers_tokenizer(name)
-        except Exception as e:
-            print(
-                f"Error loading tokenizer '{name}': {e} "
-                f"(lightweight tokenizer error: {lightweight_error})"
-            )
-            print("Falling back to 'gpt2' tokenizer as approximation.")
-            try:
-                return LightweightTokenizer.from_pretrained("gpt2")
-            except Exception:
-                return self._get_transformers_tokenizer("gpt2")
+        except Exception as auto_error:
+            raise RuntimeError(
+                f"Unable to load tokenizer '{name}' from its tokenizer assets "
+                f"or Transformers configuration. Lightweight tokenizer error: "
+                f"{lightweight_error}. AutoTokenizer error: {auto_error}."
+            ) from auto_error
 
     def _load_data(self):
         try:

@@ -65,6 +65,7 @@ async def test_benchy_integration(mock_server_url):
         sys.executable, "-m", "llama_benchy",
         "--base-url", mock_server_url,
         "--model", "test-model",
+        "--tokenizer", "gpt2",
         "--depth", "0", "4096",
         "--format", "json"
     ]
@@ -162,6 +163,7 @@ async def test_mtp_integration(mock_server_url):
         sys.executable, "-m", "llama_benchy",
         "--base-url", mock_server_url,
         "--model", f"test-model-mtp{MTP_FACTOR}",
+        "--tokenizer", "gpt2",
         "--depth", "0",
         "--format", "json"
     ]
