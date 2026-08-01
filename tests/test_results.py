@@ -166,3 +166,22 @@ def test_dataset_concurrency_uses_each_requests_observed_prompt_size():
     assert run.pp_throughput.mean == pytest.approx(300.0)
     assert run.pp_req_throughput is not None
     assert run.pp_req_throughput.mean == pytest.approx(175.0)
+
+
+def test_speculative_metrics_aggregate_timing_counters():
+    result = RequestResult(
+        total_tokens=20,
+        first_token_ts=1.0,
+        end_ts=1.2,
+        token_timestamps=[1.0, 1.1, 1.2],
+        spec_accepted_tokens=11,
+        spec_draft_tokens=80,
+    )
+    results = BenchmarkResults()
+    results.add("model", 100, 20, 0, 1, [[result]], 0.0, 100)
+
+    spec = results.runs[0].speculative
+    assert spec is not None
+    assert spec.acceptance_rate == pytest.approx(0.1375)
+    report = results._generate_md_report(concurrency=1)
+    assert "13.8%" in report

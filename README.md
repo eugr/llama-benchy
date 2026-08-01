@@ -237,6 +237,10 @@ The script attempts to estimate network or processing latency to provide "server
 - **`peak t/s` (Maximum observed Tokens per Second)**: 
     - **Only for Token Generation (tg)**: The highest token‑generation throughput observed in any 1‑second window during the run across all concurrent requests.
 
+- **`SAR` (Speculative Acceptance Rate)**:
+    - Calculated as `draft_n_accepted / draft_n` for DFlash, MTP, or another speculative backend.
+    - This column appears when the final streamed response includes the llama.cpp-compatible integer fields `draft_n` and `draft_n_accepted` under `timings` or `usage.timings`.
+
 -   **`ttfr (ms)` (Time To First Response)**:
     -   Calculation: `Time of First Response Chunk - Start Time`.
     -   Represents the raw time until the client receives *any* stream data from the server (including empty chunks or role definitions, but excluding initial http response header). This includes network latency. The same measurement method is used by `vllm bench serve` to report TTFT.

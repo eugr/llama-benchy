@@ -69,6 +69,17 @@
           "description": "Resolved public prompt identifier",
           "title": "Prompt Id"
         },
+        "speculative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpeculativeMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "pp_throughput": {
           "anyOf": [
             {
@@ -233,6 +244,29 @@
         "is_context_prefill_phase"
       ],
       "title": "BenchmarkRun",
+      "type": "object"
+    },
+    "SpeculativeMetrics": {
+      "properties": {
+        "accepted_tokens": {
+          "title": "Accepted Tokens",
+          "type": "integer"
+        },
+        "draft_tokens": {
+          "title": "Draft Tokens",
+          "type": "integer"
+        },
+        "acceptance_rate": {
+          "title": "Acceptance Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "accepted_tokens",
+        "draft_tokens",
+        "acceptance_rate"
+      ],
+      "title": "SpeculativeMetrics",
       "type": "object"
     }
   },

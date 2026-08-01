@@ -152,6 +152,34 @@ async def _run_stream(events, tokenizer=None, progress=None, request_id=None):
     )
 
 
+@pytest.mark.asyncio
+async def test_stream_timings_records_speculative_counters():
+    usage = _usage_event(20)
+    usage["timings"] = {
+        "draft_n": 80,
+        "draft_n_accepted": 11,
+    }
+
+    result = await _run_stream([_content_event("output"), usage, "[DONE]"])
+
+    assert result.spec_accepted_tokens == 11
+    assert result.spec_draft_tokens == 80
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_timings_records_speculative_counters():
+    usage = _usage_event(20)
+    usage["usage"]["timings"] = {
+        "draft_n": 80,
+        "draft_n_accepted": 11,
+    }
+
+    result = await _run_stream([_content_event("output"), usage, "[DONE]"])
+
+    assert result.spec_accepted_tokens == 11
+    assert result.spec_draft_tokens == 80
+
+
 def test_generation_payload_defaults():
     client = LLMClient("http://example.test/v1", "EMPTY", "model")
     messages = [{"role": "user", "content": "hello"}]

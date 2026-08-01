@@ -29,6 +29,8 @@ class RequestResult:
     prompt_tokens: int = 0
     total_tokens: int = 0
     server_decode_seconds: Optional[float] = None
+    spec_accepted_tokens: Optional[int] = None
+    spec_draft_tokens: Optional[int] = None
     error: Optional[str] = None
     token_timestamps: List[float] = field(default_factory=list)
 
@@ -419,6 +421,14 @@ class LLMClient:
                                         decode_ms = timings.get('predicted_ms')
                                     if isinstance(decode_ms, (int, float)) and decode_ms > 0:
                                         result.server_decode_seconds = decode_ms / 1000.0
+                                    draft_tokens = timings.get('draft_n')
+                                    accepted_tokens = timings.get('draft_n_accepted')
+                                    if all(
+                                        isinstance(value, int) and value >= 0
+                                        for value in (draft_tokens, accepted_tokens)
+                                    ):
+                                        result.spec_draft_tokens = draft_tokens
+                                        result.spec_accepted_tokens = accepted_tokens
                                 
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                     if result.first_response_ts is None:
