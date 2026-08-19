@@ -5,7 +5,7 @@ This script benchmarks OpenAI-compatible LLM endpoints, generating statistics si
 ## Motivation
 
 `llama-bench` is a CLI tool that is a part of a very popular [llama.cpp](https://github.com/ggml-org/llama.cpp) inference engine. It is widely used in LLM community to benchmark models and allows to perform measurement at different context sizes.
-However, it is available only for llama.cpp and cannot be used with other inference engines, like vllm or SGLang.
+However, it is available only for llama.cpp and cannot be used with other inference engines, like vllm, SGLang or MLX.
 
 Also, it performs measurements using the C++ engine directly which is not representative of the end user experience which can be quite different in practice.
 
@@ -295,6 +295,43 @@ llama-benchy \
 ```
 
 This will run benchmarks for all combinations of pp (128, 256), tg (32, 64), and depth (0, 1024).
+
+### MLX on Apple Silicon
+
+`llama-benchy` works unmodified against [`mlx-vlm`](https://github.com/Blaizzy/mlx-vlm)'s
+OpenAI-compatible server, which is the usual way to serve MLX models on Apple
+Silicon. `mlx-lm` also ships a compatible server.
+
+```bash
+# serve (mlx_vlm.server defaults --host to 0.0.0.0; bind loopback explicitly)
+mlx_vlm.server --model ~/models/Qwen3.8-27B-4bit --host 127.0.0.1 --port 8080
+
+llama-benchy \
+  --base-url http://127.0.0.1:8080/v1 \
+  --model ~/models/Qwen3.8-27B-4bit \
+  --pp 2048 --tg 128 --depth 0 8192 --runs 3 \
+  --extra-body '{"chat_template_kwargs":{"enable_thinking":false}}'
+```
+
+Two things are worth knowing when benchmarking MLX:
+
+**Disable thinking explicitly for reasoning models.** Qwen3.x-class chat
+templates default to `enable_thinking: true`, so without the `--extra-body`
+above you are benchmarking reasoning tokens as well as the answer. Those tokens
+are generated before any visible output and are not always reported in
+`completion_tokens`, so the run takes much longer than the token counts explain.
+Measured on an M5 Max, the same 2-token answer took 5.3 s at
+`reasoning_effort: low` and 62.0 s at `xhigh`.
+
+**Token counts fall back to stream usage.** `mlx_vlm.server` does not return
+per-chunk `token_ids`, so `llama-benchy` reports:
+
+```
+No complete token_ids in response, using stream usage token count
+```
+
+This is expected and handled - the totals come from the stream's usage block
+rather than from exact ids.
 
 ### Concurrency measurement
 
