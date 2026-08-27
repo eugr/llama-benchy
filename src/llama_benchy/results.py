@@ -24,6 +24,8 @@ class BenchmarkMetadata(BaseModel):
     model: str = Field(..., description="Model name")
     prefix_caching_enabled: bool = Field(..., description="Whether prefix caching was enabled")
     max_concurrency: int = Field(..., description="Maximum concurrency level used in the suite")
+    prompt_source: Optional[str] = Field(None, description="Prompt source type or public dataset ID")
+    dataset_revision: Optional[str] = Field(None, description="Pinned Hugging Face dataset revision")
 
 class BenchmarkRun(BaseModel):
     concurrency: int = Field(..., description="Concurrency level for this run")
@@ -31,6 +33,7 @@ class BenchmarkRun(BaseModel):
     prompt_size: int = Field(..., description="Prompt size (tokens)")
     response_size: int = Field(..., description="Response size (tokens)")
     is_context_prefill_phase: bool = Field(..., description="Whether this was a context prefill phase run")
+    prompt_id: Optional[str] = Field(None, description="Resolved public prompt identifier")
     
     # Metrics (using BenchmarkMetric)
     pp_throughput: Optional[BenchmarkMetric] = Field(None, description="Prefill tokens per second (total)")
@@ -145,7 +148,9 @@ class BenchmarkResults:
             expected_pp_tokens: int,
             is_context_phase: bool = False,
             save_total_throughput_timeseries: bool = False,
-            save_all_throughput_timeseries: bool = False):
+            save_all_throughput_timeseries: bool = False,
+            prompt_id: Optional[str] = None,
+            use_observed_prompt_tokens: bool = False):
         
         if self.model_name is None:
             self.model_name = model
@@ -184,7 +189,8 @@ class BenchmarkResults:
                 save_total_throughput_timeseries=save_total_throughput_timeseries,
                 save_all_throughput_timeseries=save_all_throughput_timeseries,
                 agg_throughput_series=agg_throughput_series,
-                agg_req_throughput_series=agg_req_throughput_series
+                agg_req_throughput_series=agg_req_throughput_series,
+                use_observed_prompt_tokens=use_observed_prompt_tokens,
             )
 
         # Calculate metrics for BenchmarkRun
@@ -207,6 +213,7 @@ class BenchmarkResults:
             prompt_size=pp, # Configured prompt size
             response_size=tg,
             is_context_prefill_phase=is_context_phase,
+            prompt_id=prompt_id,
             pp_throughput=run_metric_pp_throughput,
             pp_req_throughput=run_metric_pp_req_throughput,
             tg_throughput=run_metric_tg_throughput,
@@ -237,7 +244,8 @@ class BenchmarkResults:
                        save_total_throughput_timeseries: bool = False,
                        save_all_throughput_timeseries: bool = False,
                        agg_throughput_series: Optional[List[TimeSeries]] = None,
-                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None):
+                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None,
+                       use_observed_prompt_tokens: bool = False):
         
         valid_results = [r for r in results if r and not r.error]
         if not valid_results:
@@ -283,7 +291,7 @@ class BenchmarkResults:
             prompt_tokens = expected_pp_tokens
             if res.prompt_tokens > 0:
                 diff = abs(res.prompt_tokens - expected_pp_tokens)
-                if diff < expected_pp_tokens * 0.2:
+                if use_observed_prompt_tokens or diff < expected_pp_tokens * 0.2:
                     prompt_tokens = res.prompt_tokens
             
             batch_prompt_tokens += prompt_tokens
@@ -303,7 +311,7 @@ class BenchmarkResults:
                 first_token_times.append(res.first_token_ts)
                 e2e_ttft = res.first_token_ts - res.start_ts
                 ttft = max(0, e2e_ttft - latency)
-                est_ppt = max(0, ttfr - latency)
+                est_ppt = ttft
 
                 agg_e2e_ttft_values.append(e2e_ttft)
                 agg_ttft_values.append(ttft)
@@ -401,12 +409,13 @@ class BenchmarkResults:
             else:
                 # Standard Phase
                 d_suffix = f" @ d{run.context_size}" if run.context_size > 0 else ""
+                row_prefix = f"{run.prompt_id} " if run.prompt_id else ""
                 
                 # Prompt Processing
                 if run.pp_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"pp{run.prompt_size}{d_suffix}{c_suffix}",
+                        "test_name": f"{row_prefix}pp{run.prompt_size}{d_suffix}{c_suffix}",
                         "t_s": run.pp_throughput,
                         "t_s_req": run.pp_req_throughput,
                         "peak_ts": None,
@@ -420,7 +429,7 @@ class BenchmarkResults:
                 if run.tg_throughput or run.peak_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"tg{run.response_size}{d_suffix}{c_suffix}",
+                        "test_name": f"{row_prefix}tg{run.response_size}{d_suffix}{c_suffix}",
                         "t_s": run.tg_throughput,
                         "t_s_req": run.tg_req_throughput,
                         "peak_ts": run.peak_throughput,

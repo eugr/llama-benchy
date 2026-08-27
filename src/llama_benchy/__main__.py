@@ -4,11 +4,15 @@ Main entry point for the llama-benchy CLI.
 
 import asyncio
 import datetime
+import requests
 import sys
 from . import __version__
 from .config import BenchmarkConfig
 from .corpus import TokenizedCorpus
-from .prompts import PromptGenerator
+from .prompts import (
+    HuggingFaceConversationPromptGenerator,
+    PromptGenerator,
+)
 from .client import LLMClient
 from .runner import BenchmarkRunner
 from .progress import ProgressEmitter
@@ -30,11 +34,32 @@ async def main_async():
     print(f"Concurrency levels: {config.concurrency_levels}")
 
     # 3. Prepare Data
-    corpus = TokenizedCorpus(config.book_url, config.tokenizer, config.model)
-    print(f"Total tokens available in text corpus: {len(corpus)}")
+    corpus = TokenizedCorpus(
+        config.book_url,
+        config.tokenizer,
+        config.model,
+        load_data=not bool(config.messages_dataset),
+    )
+    if config.messages_dataset:
+        print(f"Loading dataset prompt source: {config.messages_dataset}")
+    else:
+        print(f"Total tokens available in text corpus: {len(corpus)}")
 
     # 4. Initialize Components
-    prompt_gen = PromptGenerator(corpus)
+    prompt_gen: (
+        PromptGenerator | HuggingFaceConversationPromptGenerator
+    )
+    if config.messages_dataset:
+        try:
+            prompt_gen = HuggingFaceConversationPromptGenerator(
+                corpus,
+                config.messages_dataset,
+            )
+        except (OSError, ValueError, requests.RequestException) as e:
+            print(f"Error loading messages dataset: {e}")
+            raise SystemExit(2)
+    else:
+        prompt_gen = PromptGenerator(corpus)
     client = LLMClient(
         config.base_url,
         config.api_key,
