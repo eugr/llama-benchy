@@ -110,6 +110,22 @@ def _content_event(content, token_ids=_MISSING):
     return {"choices": [choice]}
 
 
+def _tool_call_event(arguments, token_ids=_MISSING):
+    choice = {
+        "index": 0,
+        "delta": {
+            "tool_calls": [{
+                "index": 0,
+                "function": {"arguments": arguments},
+            }],
+        },
+        "finish_reason": None,
+    }
+    if token_ids is not _MISSING:
+        choice["token_ids"] = token_ids
+    return {"choices": [choice]}
+
+
 def _usage_event(completion_tokens):
     return {
         "choices": [],
@@ -134,6 +150,34 @@ async def _run_stream(events, tokenizer=None, progress=None, request_id=None):
         progress=progress,
         request_id=request_id,
     )
+
+
+@pytest.mark.asyncio
+async def test_stream_timings_records_speculative_counters():
+    usage = _usage_event(20)
+    usage["timings"] = {
+        "draft_n": 80,
+        "draft_n_accepted": 11,
+    }
+
+    result = await _run_stream([_content_event("output"), usage, "[DONE]"])
+
+    assert result.spec_accepted_tokens == 11
+    assert result.spec_draft_tokens == 80
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_timings_records_speculative_counters():
+    usage = _usage_event(20)
+    usage["usage"]["timings"] = {
+        "draft_n": 80,
+        "draft_n_accepted": 11,
+    }
+
+    result = await _run_stream([_content_event("output"), usage, "[DONE]"])
+
+    assert result.spec_accepted_tokens == 11
+    assert result.spec_draft_tokens == 80
 
 
 def test_generation_payload_defaults():
@@ -165,6 +209,17 @@ def test_generation_payload_merges_extra_body():
     assert payload["cache_prompt"] is False
     assert payload["temperature"] == 0
     assert payload["ignore_eos"] is True
+
+
+def test_generation_payload_preserves_tools():
+    client = LLMClient("http://example.test/v1", "EMPTY", "model")
+    tools = [{"type": "function", "function": {"name": "bash"}}]
+
+    payload = client._build_generation_payload(
+        [], max_tokens=128, no_cache=False, tools=tools
+    )
+
+    assert payload["tools"] == tools
 
 
 def test_exact_tg_forces_min_tokens_and_ignore_eos():
@@ -202,6 +257,29 @@ async def test_run_generation_replaces_empty_user_message_with_context_probe():
         {"role": "user", "content": CONTEXT_LOAD_USER_MESSAGE},
     ]
     assert messages[-1]["content"].strip()
+
+
+@pytest.mark.asyncio
+async def test_run_generation_preserves_explicit_conversation_messages():
+    client = LLMClient("http://example.test/v1", "EMPTY", "model")
+    session = _FakeSession([_sse_event("[DONE]")])
+    messages = [
+        {"role": "system", "content": "bootstrap"},
+        {"role": "user", "content": "inspect the repository"},
+        {"role": "assistant", "content": "I inspected it."},
+        {"role": "user", "content": "now fix the tests"},
+    ]
+
+    await client.run_generation(
+        session,
+        context_text="ignored",
+        prompt_text="ignored",
+        max_tokens=8,
+        no_cache=False,
+        messages=messages,
+    )
+
+    assert session.requests[0]["kwargs"]["json"]["messages"] == messages
 
 
 @pytest.mark.asyncio
@@ -266,6 +344,39 @@ async def test_streaming_uses_final_usage_when_token_ids_are_missing():
     assert result.total_tokens == 2
     assert len(result.token_timestamps) == 2
     assert tokenizer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_times_tool_call_argument_deltas():
+    result = await _run_stream([
+        _tool_call_event('{"command":'),
+        _tool_call_event('"pytest"}'),
+        _usage_event(12),
+        "[DONE]",
+    ])
+
+    assert result.prompt_tokens == 16
+    assert result.total_tokens == 12
+    assert result.first_token_ts is not None
+    assert len(result.token_timestamps) == 12
+    assert result.token_timestamps[0] <= result.token_timestamps[-1]
+
+
+@pytest.mark.asyncio
+async def test_streaming_prefers_server_reported_decode_duration():
+    usage = _usage_event(10)
+    usage["timings"] = {"decode_ms": 2000.0}
+
+    result = await _run_stream([
+        _content_event("buffered response"),
+        usage,
+        "[DONE]",
+    ])
+
+    assert result.server_decode_seconds == pytest.approx(2.0)
+    assert result.total_tokens == 10
+    assert len(result.token_timestamps) == 10
+    assert result.token_timestamps[-1] - result.token_timestamps[0] == pytest.approx(1.8)
 
 
 @pytest.mark.asyncio

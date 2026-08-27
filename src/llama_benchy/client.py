@@ -28,6 +28,9 @@ class RequestResult:
     first_response_ts: Optional[float] = None
     prompt_tokens: int = 0
     total_tokens: int = 0
+    server_decode_seconds: Optional[float] = None
+    spec_accepted_tokens: Optional[int] = None
+    spec_draft_tokens: Optional[int] = None
     error: Optional[str] = None
     token_timestamps: List[float] = field(default_factory=list)
 
@@ -47,7 +50,13 @@ class LLMClient:
         self.exact_tg = exact_tg
         self.headers = {"Authorization": f"Bearer {api_key}"}
 
-    def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool) -> Dict[str, Any]:
+    def _build_generation_payload(
+        self,
+        messages: List[Dict[str, Any]],
+        max_tokens: int,
+        no_cache: bool,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
@@ -56,6 +65,9 @@ class LLMClient:
             "return_token_ids": True,
             "stream_options": {"include_usage": True},
         }
+
+        if tools:
+            payload["tools"] = tools
 
         if no_cache:
             payload["cache_prompt"] = False
@@ -107,6 +119,37 @@ class LLMClient:
 
         step = (last_ts - first_ts) / (token_count - 1)
         return [first_ts + (step * i) for i in range(token_count)]
+
+    @staticmethod
+    def _tool_call_text(tool_calls: Any) -> str:
+        if not isinstance(tool_calls, list):
+            return ""
+        parts = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            arguments = function.get("arguments")
+            if isinstance(name, str):
+                parts.append(name)
+            if isinstance(arguments, str):
+                parts.append(arguments)
+        return "".join(parts)
+
+    @staticmethod
+    def _apply_server_decode_timestamps(result: RequestResult) -> None:
+        seconds = result.server_decode_seconds
+        if seconds is None or seconds <= 0 or result.total_tokens <= 0 or result.end_ts <= 0:
+            return
+        step = seconds / result.total_tokens
+        first_ts = result.end_ts - seconds + step
+        result.token_timestamps = [
+            first_ts + step * index for index in range(result.total_tokens)
+        ]
+        result.first_token_ts = first_ts
 
     def _finalize_stream_tokens(
             self,
@@ -311,17 +354,20 @@ class LLMClient:
             tokenizer=None,
             progress=None,
             request_id: Optional[int] = None,
+            messages: Optional[List[Dict[str, Any]]] = None,
+            tools: Optional[List[Dict[str, Any]]] = None,
         ) -> RequestResult:
 
-        messages = []
-        if context_text:
-            messages.append({"role": "system", "content": context_text})
-        messages.append({"role": "user", "content": self._non_empty_user_content(prompt_text)})
+        if messages is None:
+            messages = []
+            if context_text:
+                messages.append({"role": "system", "content": context_text})
+            messages.append({"role": "user", "content": self._non_empty_user_content(prompt_text)})
         
         result = RequestResult()
         
         try:
-            payload = self._build_generation_payload(messages, max_tokens, no_cache)
+            payload = self._build_generation_payload(messages, max_tokens, no_cache, tools)
             
             result.start_ts = time.perf_counter()
 
@@ -365,6 +411,24 @@ class LLMClient:
                                     completion_tokens = usage.get('completion_tokens')
                                     if isinstance(completion_tokens, int) and completion_tokens >= 0:
                                         usage_completion_tokens = completion_tokens
+
+                                timings = chunk.get('timings')
+                                if not isinstance(timings, dict) and isinstance(usage, dict):
+                                    timings = usage.get('timings')
+                                if isinstance(timings, dict):
+                                    decode_ms = timings.get('decode_ms')
+                                    if not isinstance(decode_ms, (int, float)):
+                                        decode_ms = timings.get('predicted_ms')
+                                    if isinstance(decode_ms, (int, float)) and decode_ms > 0:
+                                        result.server_decode_seconds = decode_ms / 1000.0
+                                    draft_tokens = timings.get('draft_n')
+                                    accepted_tokens = timings.get('draft_n_accepted')
+                                    if all(
+                                        isinstance(value, int) and value >= 0
+                                        for value in (draft_tokens, accepted_tokens)
+                                    ):
+                                        result.spec_draft_tokens = draft_tokens
+                                        result.spec_accepted_tokens = accepted_tokens
                                 
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                     if result.first_response_ts is None:
@@ -382,8 +446,16 @@ class LLMClient:
                                     content = delta.get('content')
                                     reasoning_content = delta.get('reasoning_content')
                                     reasoning = delta.get('reasoning')
+                                    tool_call_text = self._tool_call_text(delta.get('tool_calls'))
+                                    token_ids = chunk['choices'][0].get('token_ids')
 
-                                    if content or reasoning_content or reasoning:
+                                    if (
+                                        content
+                                        or reasoning_content
+                                        or reasoning
+                                        or tool_call_text
+                                        or (isinstance(token_ids, list) and token_ids)
+                                    ):
                                         if result.first_token_ts is None:
                                             result.first_token_ts = chunk_time
                                             if progress is not None and request_id is not None:
@@ -395,8 +467,7 @@ class LLMClient:
                                                 except Exception:
                                                     pass
 
-                                        token_ids = chunk['choices'][0].get('token_ids')
-                                        text = content or reasoning_content or reasoning
+                                        text = content or reasoning_content or reasoning or tool_call_text
                                         content_chunks.append({
                                             "text": text,
                                             "timestamp": chunk_time,
@@ -421,8 +492,9 @@ class LLMClient:
                             except json.JSONDecodeError:
                                 continue
 
-                self._finalize_stream_tokens(result, content_chunks, usage_completion_tokens, tokenizer)
                 result.end_ts = time.perf_counter()
+                self._finalize_stream_tokens(result, content_chunks, usage_completion_tokens, tokenizer)
+                self._apply_server_decode_timestamps(result)
 
         except Exception as e:
             print(f"Error during run: {e}")

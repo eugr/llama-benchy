@@ -67,3 +67,121 @@ def test_block_streaming_excludes_first_observed_block_from_decode_throughput():
     run = results.runs[0]
     assert run.tg_throughput is not None
     assert run.tg_throughput.mean == pytest.approx(256.0)
+
+
+def test_prefill_throughput_uses_first_content_token_not_empty_response():
+    result = RequestResult(
+        start_ts=0.0,
+        first_response_ts=0.01,
+        first_token_ts=2.0,
+        end_ts=2.2,
+        prompt_tokens=2_000,
+        total_tokens=3,
+        token_timestamps=[2.0, 2.1, 2.2],
+    )
+
+    results = BenchmarkResults()
+    results.add(
+        "model",
+        2_000,
+        3,
+        0,
+        1,
+        [[result]],
+        latency=0.1,
+        expected_pp_tokens=2_000,
+    )
+
+    run = results.runs[0]
+    assert run.ttfr is not None
+    assert run.ttfr.mean == pytest.approx(10.0)
+    assert run.est_ppt is not None
+    assert run.est_ppt.mean == pytest.approx(1_900.0)
+    assert run.pp_throughput is not None
+    assert run.pp_throughput.mean == pytest.approx(2_000 / 1.9)
+
+
+def test_dataset_run_reports_observed_sizes_and_prompt_id():
+    result = RequestResult(
+        start_ts=0.0,
+        first_response_ts=1.0,
+        first_token_ts=1.1,
+        end_ts=1.4,
+        prompt_tokens=25_711,
+        total_tokens=309,
+        token_timestamps=[1.1, 1.2, 1.3],
+    )
+
+    results = BenchmarkResults()
+    results.add(
+        "model",
+        25_711,
+        309,
+        0,
+        1,
+        [[result]],
+        latency=0.0,
+        expected_pp_tokens=25_711,
+        prompt_id="task@trajectory",
+    )
+
+    run = results.runs[0]
+    assert (run.prompt_id, run.prompt_size, run.response_size) == (
+        "task@trajectory", 25_711, 309
+    )
+    assert {row["test_name"] for row in results._generate_rows()} == {
+        "task@trajectory pp25711",
+        "task@trajectory tg309",
+    }
+
+
+def test_dataset_concurrency_uses_each_requests_observed_prompt_size():
+    first = RequestResult(
+        start_ts=0.0,
+        first_response_ts=0.01,
+        first_token_ts=1.0,
+        end_ts=1.2,
+        prompt_tokens=100,
+        total_tokens=3,
+        token_timestamps=[1.0, 1.1, 1.2],
+    )
+    second = RequestResult(
+        start_ts=0.0,
+        first_response_ts=0.01,
+        first_token_ts=2.0,
+        end_ts=2.2,
+        prompt_tokens=500,
+        total_tokens=3,
+        token_timestamps=[2.0, 2.1, 2.2],
+    )
+
+    results = BenchmarkResults()
+    results.add(
+        "model", 300, 3, 0, 2, [[first, second]], 0.0, 300,
+        use_observed_prompt_tokens=True,
+    )
+
+    run = results.runs[0]
+    assert run.pp_throughput is not None
+    assert run.pp_throughput.mean == pytest.approx(300.0)
+    assert run.pp_req_throughput is not None
+    assert run.pp_req_throughput.mean == pytest.approx(175.0)
+
+
+def test_speculative_metrics_aggregate_timing_counters():
+    result = RequestResult(
+        total_tokens=20,
+        first_token_ts=1.0,
+        end_ts=1.2,
+        token_timestamps=[1.0, 1.1, 1.2],
+        spec_accepted_tokens=11,
+        spec_draft_tokens=80,
+    )
+    results = BenchmarkResults()
+    results.add("model", 100, 20, 0, 1, [[result]], 0.0, 100)
+
+    spec = results.runs[0].speculative
+    assert spec is not None
+    assert spec.acceptance_rate == pytest.approx(0.1375)
+    report = results._generate_md_report(concurrency=1)
+    assert "13.8%" in report

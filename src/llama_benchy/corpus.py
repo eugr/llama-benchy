@@ -32,10 +32,16 @@ class LightweightTokenizer:
 
 
 class TokenizedCorpus:
-    def __init__(self, book_url: str, tokenizer_name: Optional[str], model_name: str):
+    def __init__(
+        self,
+        book_url: str,
+        tokenizer_name: Optional[str],
+        model_name: str,
+        load_data: bool = True,
+    ):
         self.book_url = book_url
         self.tokenizer = self._get_tokenizer(model_name, tokenizer_name)
-        self.tokens = self._load_data()
+        self.tokens = self._load_data() if load_data else []
 
     def _get_transformers_tokenizer(self, name: str):
         from transformers import AutoTokenizer

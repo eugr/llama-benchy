@@ -52,6 +52,9 @@ class BenchmarkConfig(BaseModel):
         ..., description="Enable prefix caching performance measurement"
     )
     book_url: str = Field(..., description="URL of a book to use for text generation")
+    messages_dataset: Optional[str] = Field(
+        None, description="Hugging Face agent trajectory dataset used as the prompt source"
+    )
     post_run_cmd: Optional[str] = Field(
         None, description="Command to execute after each test run"
     )
@@ -300,6 +303,16 @@ class BenchmarkConfig(BaseModel):
             help="URL of a book to use for text generation, defaults to Sherlock Holmes",
         )
         parser.add_argument(
+            "--messages-dataset",
+            type=str,
+            default=None,
+            metavar="SELECTOR",
+            help=(
+                "Hugging Face trajectory selector, e.g. "
+                "owner/dataset?subset=default&split=train&instance_id=task-1"
+            ),
+        )
+        parser.add_argument(
             "--latency-mode",
             type=str,
             default="api",
@@ -390,7 +403,8 @@ class BenchmarkConfig(BaseModel):
             args.exit_on_first_fail = True
         if args.warmup_runs < 0:
             parser.error("--warmup-runs must be >= 0")
-
+        if args.messages_dataset and (args.depth != [0] or args.enable_prefix_caching):
+            parser.error("conversation prompts require --depth 0 and cannot use --enable-prefix-caching")
         try:
             extra_body = BenchmarkConfig._parse_extra_body(args.extra_body)
         except ValueError as e:
@@ -426,7 +440,7 @@ class BenchmarkConfig(BaseModel):
             model=model_to_use,
             served_model_name=served_model_name_to_use,
             tokenizer=args.tokenizer,
-            pp_counts=args.pp,
+            pp_counts=[0] if args.messages_dataset else args.pp,
             tg_counts=args.tg,
             exact_tg=args.exact_tg,
             depths=args.depth,
@@ -439,6 +453,7 @@ class BenchmarkConfig(BaseModel):
             adapt_prompt=args.adapt_prompt,
             enable_prefix_caching=args.enable_prefix_caching,
             book_url=args.book_url,
+            messages_dataset=args.messages_dataset,
             post_run_cmd=args.post_run_cmd,
             concurrency_levels=args.concurrency,
             save_result=args.save_result,

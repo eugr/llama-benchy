@@ -56,6 +56,30 @@
           "title": "Is Context Prefill Phase",
           "type": "boolean"
         },
+        "prompt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolved public prompt identifier",
+          "title": "Prompt Id"
+        },
+        "speculative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpeculativeMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "pp_throughput": {
           "anyOf": [
             {
@@ -221,6 +245,29 @@
       ],
       "title": "BenchmarkRun",
       "type": "object"
+    },
+    "SpeculativeMetrics": {
+      "properties": {
+        "accepted_tokens": {
+          "title": "Accepted Tokens",
+          "type": "integer"
+        },
+        "draft_tokens": {
+          "title": "Draft Tokens",
+          "type": "integer"
+        },
+        "acceptance_rate": {
+          "title": "Acceptance Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "accepted_tokens",
+        "draft_tokens",
+        "acceptance_rate"
+      ],
+      "title": "SpeculativeMetrics",
+      "type": "object"
     }
   },
   "properties": {
@@ -258,6 +305,32 @@
       "description": "Maximum concurrency level used in the suite",
       "title": "Max Concurrency",
       "type": "integer"
+    },
+    "prompt_source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Prompt source type or public dataset ID",
+      "title": "Prompt Source"
+    },
+    "dataset_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pinned Hugging Face dataset revision",
+      "title": "Dataset Revision"
     },
     "benchmarks": {
       "description": "List of benchmark run results",

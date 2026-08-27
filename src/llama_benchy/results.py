@@ -16,6 +16,11 @@ class BenchmarkMetric(BaseModel):
     std: float = Field(..., description="Standard deviation")
     values: List[float] = Field(..., description="Raw values")
 
+class SpeculativeMetrics(BaseModel):
+    accepted_tokens: int
+    draft_tokens: int
+    acceptance_rate: float
+
 class BenchmarkMetadata(BaseModel):
     version: str = Field(..., description="Benchmark tool version")
     timestamp: str = Field(..., description="Run timestamp")
@@ -24,6 +29,8 @@ class BenchmarkMetadata(BaseModel):
     model: str = Field(..., description="Model name")
     prefix_caching_enabled: bool = Field(..., description="Whether prefix caching was enabled")
     max_concurrency: int = Field(..., description="Maximum concurrency level used in the suite")
+    prompt_source: Optional[str] = Field(None, description="Prompt source type or public dataset ID")
+    dataset_revision: Optional[str] = Field(None, description="Pinned Hugging Face dataset revision")
 
 class BenchmarkRun(BaseModel):
     concurrency: int = Field(..., description="Concurrency level for this run")
@@ -31,6 +38,8 @@ class BenchmarkRun(BaseModel):
     prompt_size: int = Field(..., description="Prompt size (tokens)")
     response_size: int = Field(..., description="Response size (tokens)")
     is_context_prefill_phase: bool = Field(..., description="Whether this was a context prefill phase run")
+    prompt_id: Optional[str] = Field(None, description="Resolved public prompt identifier")
+    speculative: Optional[SpeculativeMetrics] = None
     
     # Metrics (using BenchmarkMetric)
     pp_throughput: Optional[BenchmarkMetric] = Field(None, description="Prefill tokens per second (total)")
@@ -145,7 +154,9 @@ class BenchmarkResults:
             expected_pp_tokens: int,
             is_context_phase: bool = False,
             save_total_throughput_timeseries: bool = False,
-            save_all_throughput_timeseries: bool = False):
+            save_all_throughput_timeseries: bool = False,
+            prompt_id: Optional[str] = None,
+            use_observed_prompt_tokens: bool = False):
         
         if self.model_name is None:
             self.model_name = model
@@ -184,7 +195,8 @@ class BenchmarkResults:
                 save_total_throughput_timeseries=save_total_throughput_timeseries,
                 save_all_throughput_timeseries=save_all_throughput_timeseries,
                 agg_throughput_series=agg_throughput_series,
-                agg_req_throughput_series=agg_req_throughput_series
+                agg_req_throughput_series=agg_req_throughput_series,
+                use_observed_prompt_tokens=use_observed_prompt_tokens,
             )
 
         # Calculate metrics for BenchmarkRun
@@ -201,12 +213,27 @@ class BenchmarkResults:
         run_metric_est_ppt = self._calculate_metric(agg_est_ppt_values, 1000)
         run_metric_e2e_ttft = self._calculate_metric(agg_e2e_ttft_values, 1000)
 
+        spec_results = [
+            result for batch in run_results for result in batch
+            if result.spec_accepted_tokens is not None
+            and result.spec_draft_tokens is not None
+        ]
+        accepted = sum(result.spec_accepted_tokens or 0 for result in spec_results)
+        drafted = sum(result.spec_draft_tokens or 0 for result in spec_results)
+        speculative = SpeculativeMetrics(
+            accepted_tokens=accepted,
+            draft_tokens=drafted,
+            acceptance_rate=accepted / drafted if drafted else 0.0,
+        ) if spec_results else None
+
         self.runs.append(BenchmarkRun(
             concurrency=concurrency,
             context_size=depth,
             prompt_size=pp, # Configured prompt size
             response_size=tg,
             is_context_prefill_phase=is_context_phase,
+            prompt_id=prompt_id,
+            speculative=speculative,
             pp_throughput=run_metric_pp_throughput,
             pp_req_throughput=run_metric_pp_req_throughput,
             tg_throughput=run_metric_tg_throughput,
@@ -237,7 +264,8 @@ class BenchmarkResults:
                        save_total_throughput_timeseries: bool = False,
                        save_all_throughput_timeseries: bool = False,
                        agg_throughput_series: Optional[List[TimeSeries]] = None,
-                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None):
+                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None,
+                       use_observed_prompt_tokens: bool = False):
         
         valid_results = [r for r in results if r and not r.error]
         if not valid_results:
@@ -283,7 +311,7 @@ class BenchmarkResults:
             prompt_tokens = expected_pp_tokens
             if res.prompt_tokens > 0:
                 diff = abs(res.prompt_tokens - expected_pp_tokens)
-                if diff < expected_pp_tokens * 0.2:
+                if use_observed_prompt_tokens or diff < expected_pp_tokens * 0.2:
                     prompt_tokens = res.prompt_tokens
             
             batch_prompt_tokens += prompt_tokens
@@ -303,7 +331,7 @@ class BenchmarkResults:
                 first_token_times.append(res.first_token_ts)
                 e2e_ttft = res.first_token_ts - res.start_ts
                 ttft = max(0, e2e_ttft - latency)
-                est_ppt = max(0, ttfr - latency)
+                est_ppt = ttft
 
                 agg_e2e_ttft_values.append(e2e_ttft)
                 agg_ttft_values.append(ttft)
@@ -396,17 +424,19 @@ class BenchmarkResults:
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "speculative": run.speculative,
                     })
             else:
                 # Standard Phase
                 d_suffix = f" @ d{run.context_size}" if run.context_size > 0 else ""
+                row_prefix = f"{run.prompt_id} " if run.prompt_id else ""
                 
                 # Prompt Processing
                 if run.pp_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"pp{run.prompt_size}{d_suffix}{c_suffix}",
+                        "test_name": f"{row_prefix}pp{run.prompt_size}{d_suffix}{c_suffix}",
                         "t_s": run.pp_throughput,
                         "t_s_req": run.pp_req_throughput,
                         "peak_ts": None,
@@ -420,14 +450,15 @@ class BenchmarkResults:
                 if run.tg_throughput or run.peak_throughput:
                     rows.append({
                         "model": self.model_name or "Unknown",
-                        "test_name": f"tg{run.response_size}{d_suffix}{c_suffix}",
+                        "test_name": f"{row_prefix}tg{run.response_size}{d_suffix}{c_suffix}",
                         "t_s": run.tg_throughput,
                         "t_s_req": run.tg_req_throughput,
                         "peak_ts": run.peak_throughput,
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "speculative": run.speculative,
                     })
         return rows
 
@@ -440,6 +471,10 @@ class BenchmarkResults:
             if metric is None:
                 return ""
             return f"{metric.mean:.2f} ± {metric.std:.2f}"
+
+        def spec_values(row: Dict[str, Any]) -> List[str]:
+            spec = row.get("speculative")
+            return [""] if spec is None else [f"{spec.acceptance_rate:.1%}"]
             
         data = [[
             row["model"], 
@@ -450,11 +485,12 @@ class BenchmarkResults:
             fmt(row["peak_ts_req"]),
             fmt(row["ttfr"]), 
             fmt(row["est_ppt"]), 
-            fmt(row["e2e_ttft"])
+            fmt(row["e2e_ttft"]),
+            *spec_values(row),
         ] for row in rows]
 
         ts_header = "t/s (total)" if concurrency > 1 else "t/s"
-        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)", "SAR"]
         
         if concurrency == 1:
             data = [[
@@ -464,11 +500,12 @@ class BenchmarkResults:
                 fmt(row["peak_ts"]),
                 fmt(row["ttfr"]), 
                 fmt(row["est_ppt"]), 
-                fmt(row["e2e_ttft"])
+                fmt(row["e2e_ttft"]),
+                *spec_values(row),
             ] for row in rows]
-            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)", "SAR"]
 
-        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right"))
+        return tabulate(data, headers=headers, tablefmt="pipe")
 
     def save_report(self, filename: Optional[str], format: str, concurrency: int = 1):
         msg = ""
@@ -507,9 +544,10 @@ class BenchmarkResults:
         elif format == "csv":
              rows = self._generate_rows()
              csv_rows = []
-             headers = ["model", "test_name", "t_s_mean", "t_s_std", "t_s_req_mean", "t_s_req_std", "peak_ts_mean", "peak_ts_std", "peak_ts_req_mean", "peak_ts_req_std", "ttfr_mean", "ttfr_std", "est_ppt_mean", "est_ppt_std", "e2e_ttft_mean", "e2e_ttft_std"]
+             headers = ["model", "test_name", "t_s_mean", "t_s_std", "t_s_req_mean", "t_s_req_std", "peak_ts_mean", "peak_ts_std", "peak_ts_req_mean", "peak_ts_req_std", "ttfr_mean", "ttfr_std", "est_ppt_mean", "est_ppt_std", "e2e_ttft_mean", "e2e_ttft_std", "spec_acceptance_rate"]
              
              for r in rows:
+                 spec = r.get("speculative")
                  row = {
                      "model": r["model"],
                      "test_name": r["test_name"],
@@ -527,6 +565,7 @@ class BenchmarkResults:
                      "est_ppt_std": r["est_ppt"].std if r["est_ppt"] else None,
                      "e2e_ttft_mean": r["e2e_ttft"].mean if r["e2e_ttft"] else None,
                      "e2e_ttft_std": r["e2e_ttft"].std if r["e2e_ttft"] else None,
+                     "spec_acceptance_rate": spec.acceptance_rate if spec else None,
                  }
                  csv_rows.append(row)
              

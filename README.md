@@ -169,6 +169,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
+-   `--messages-dataset`: Load agent trajectories from a public Hugging Face dataset using a URL-like selector: `owner/dataset?subset=...&split=...&instance_id=...`. Repeat `instance_id` query parameters for a suite. Selected trajectories are cached locally and no payload is committed with llama-benchy.
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
 -   `--no-warmup`: Skip warmup phase.
 -   `--skip-coherence`: Skip coherence test after warmup.
@@ -195,6 +196,22 @@ llama-benchy \
   --exact-tg
 ```
 
+For a reproducible public Qwen coding-agent workload, select stable task IDs from NVIDIA Open-SWE-Traces. The OpenHands/Qwen split contains modern system prompts, structured tool calls, tool results, and tasks from different repositories:
+
+```bash
+llama-benchy \
+  --base-url http://localhost:8000/v1 \
+  --model my-model \
+  --messages-dataset 'nvidia/Open-SWE-Traces?subset=openhands&split=qwen35_122b&instance_id=hacker0x01__react-datepicker-4602&instance_id=googleapis__python-api-core-86&instance_id=awslabs__aws-ddk-464&instance_id=vmware__tern-359&instance_id=anchore__grype-2741&instance_id=meltano__sdk-2830' \
+  --tg 1024 \
+  --extra-body temperature=0 \
+  --no-cache
+```
+
+The selector and resolved dataset revision are included in JSON metadata, and each result records its resolved `instance_id@trajectory_id`. Instance selection prefers the longest successful trajectory and uses the trajectory UUID as a deterministic tie-breaker. Open-SWE-Traces is CC BY 4.0 and includes the source repository's SPDX license in each row.
+
+Dataset conversation mode sends each selected trajectory's complete conversation prefix and tool definitions, removing only its completed trailing assistant response. It ignores `--pp`: results use server-observed per-request prompt and completion token counts. `--tg` remains an output cap. Dataset mode requires `--depth 0` and does not support the separate prefix-caching benchmark. Each selected trajectory is a separate benchmark shape. At concurrency `N`, benchy sends `N` copies of that trajectory simultaneously, so the same selected set can be compared directly across concurrency levels.
+
 ### Metrics
 
 The script outputs a table with the following metrics. All time measurements are in milliseconds (ms).
@@ -220,12 +237,17 @@ The script attempts to estimate network or processing latency to provide "server
 - **`peak t/s` (Maximum observed Tokens per Second)**: 
     - **Only for Token Generation (tg)**: The highest token‑generation throughput observed in any 1‑second window during the run across all concurrent requests.
 
+- **`SAR` (Speculative Acceptance Rate)**:
+    - Calculated as `draft_n_accepted / draft_n` for DFlash, MTP, or another speculative backend.
+    - This column appears when the final streamed response includes the llama.cpp-compatible integer fields `draft_n` and `draft_n_accepted` under `timings` or `usage.timings`.
+
 -   **`ttfr (ms)` (Time To First Response)**:
     -   Calculation: `Time of First Response Chunk - Start Time`.
     -   Represents the raw time until the client receives *any* stream data from the server (including empty chunks or role definitions, but excluding initial http response header). This includes network latency. The same measurement method is used by `vllm bench serve` to report TTFT.
 
 -   **`est_ppt (ms)` (Estimated Prompt Processing Time)**:
-    -   Calculation: `TTFR - Estimated Latency`.
+    -   Calculation: `End-to-end Time to First Token - Estimated Latency`.
+    -   Uses the first content-bearing token rather than an earlier empty protocol chunk.
     -   Estimated time the server spent processing the prompt. Used for calculating Prompt Processing speed.
 
 -   **`e2e_ttft (ms)` (End-to-End Time To First Token)**:
