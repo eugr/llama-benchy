@@ -56,6 +56,19 @@
           "title": "Is Context Prefill Phase",
           "type": "boolean"
         },
+        "prompt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolved public prompt identifier",
+          "title": "Prompt Id"
+        },
         "pp_throughput": {
           "anyOf": [
             {
@@ -258,6 +271,32 @@
       "description": "Maximum concurrency level used in the suite",
       "title": "Max Concurrency",
       "type": "integer"
+    },
+    "prompt_source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Prompt source type or public dataset ID",
+      "title": "Prompt Source"
+    },
+    "dataset_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pinned Hugging Face dataset revision",
+      "title": "Dataset Revision"
     },
     "benchmarks": {
       "description": "List of benchmark run results",

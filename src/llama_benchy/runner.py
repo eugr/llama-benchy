@@ -3,20 +3,32 @@ import subprocess
 import time
 import sys
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Sequence, Tuple
 import aiohttp
 
 from ._version import __version__
 from .config import BenchmarkConfig
 from .client import CONTEXT_LOAD_USER_MESSAGE, LLMClient
-from .prompts import PromptGenerator
+from .prompts import (
+    HuggingFaceConversationPromptGenerator,
+    PromptGenerator,
+    PromptSample,
+)
 from .results import BenchmarkResults, BenchmarkMetadata
 
 class BenchmarkFailure(Exception):
     pass
 
 class BenchmarkRunner:
-    def __init__(self, config: BenchmarkConfig, client: LLMClient, prompt_generator: PromptGenerator, progress=None):
+    def __init__(
+        self,
+        config: BenchmarkConfig,
+        client: LLMClient,
+        prompt_generator: (
+            PromptGenerator | HuggingFaceConversationPromptGenerator
+        ),
+        progress=None,
+    ):
         self.config = config
         self.client = client
         self.prompt_gen = prompt_generator
@@ -32,6 +44,24 @@ class BenchmarkRunner:
         rid = self._next_request_id
         self._next_request_id += 1
         return rid
+
+    def _metadata(self, latency: float, max_concurrency: int) -> BenchmarkMetadata:
+        prompt_source = None
+        dataset_revision = None
+        if isinstance(self.prompt_gen, HuggingFaceConversationPromptGenerator):
+            prompt_source = self.config.messages_dataset
+            dataset_revision = self.prompt_gen.dataset_revision
+        return BenchmarkMetadata(
+            version=__version__,
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+            latency_mode=self.config.latency_mode,
+            latency_ms=latency * 1000,
+            model=self.config.model,
+            prefix_caching_enabled=self.config.enable_prefix_caching,
+            max_concurrency=max_concurrency,
+            prompt_source=prompt_source,
+            dataset_revision=dataset_revision,
+        )
 
     def _emit_request_start(self, request_id: int, pp: int, tg: int, depth: int, concurrency: int, run_index: int) -> None:
         if self.progress is None:
@@ -98,21 +128,38 @@ class BenchmarkRunner:
                     for pp in self.config.pp_counts:
                         for tg in self.config.tg_counts:
                             for concurrency in self.config.concurrency_levels:
-                                print(f"Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}")
+                                if isinstance(
+                                    self.prompt_gen,
+                                    HuggingFaceConversationPromptGenerator,
+                                ):
+                                    print(
+                                        f"Running dataset instances: {self.prompt_gen.instance_ids}, "
+                                        f"tg cap={tg}, concurrency={concurrency}"
+                                    )
+                                else:
+                                    print(f"Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}")
 
                                 run_std_results = []
                                 run_ctx_results = []
                                 expected_pp = pp
                                 expected_ctx = depth
 
-                                total_runs = self.config.num_runs + warmup_runs
+                                measured_runs = (
+                                    len(self.prompt_gen.row_ids)
+                                    if isinstance(
+                                        self.prompt_gen,
+                                        HuggingFaceConversationPromptGenerator,
+                                    )
+                                    else self.config.num_runs
+                                )
+                                total_runs = measured_runs + warmup_runs
                                 for run in range(total_runs):
                                     is_warmup = run < warmup_runs
                                     measured_run_index = run - warmup_runs
                                     run_label = (
                                         f"Warmup {run + 1}/{warmup_runs}"
                                         if is_warmup
-                                        else f"Run {measured_run_index + 1}/{self.config.num_runs}"
+                                        else f"Run {measured_run_index + 1}/{measured_runs}"
                                     )
 
                                     # Adapt prompt tokens
@@ -127,12 +174,25 @@ class BenchmarkRunner:
                                     expected_pp = current_pp
                                     expected_ctx = current_depth
 
-                                    prompt_batch = self.prompt_gen.generate_batch(
-                                        concurrency,
-                                        current_pp,
-                                        current_depth,
-                                        self.config.no_cache
-                                    )
+                                    prompt_batch: Sequence[Tuple[str, str] | PromptSample]
+                                    if isinstance(
+                                        self.prompt_gen,
+                                        HuggingFaceConversationPromptGenerator,
+                                    ):
+                                        prompt_batch = self.prompt_gen.generate_batch(
+                                            concurrency,
+                                            current_pp,
+                                            current_depth,
+                                            self.config.no_cache,
+                                            run_index=max(0, measured_run_index),
+                                        )
+                                    else:
+                                        prompt_batch = self.prompt_gen.generate_batch(
+                                            concurrency,
+                                            current_pp,
+                                            current_depth,
+                                            self.config.no_cache,
+                                        )
 
                                     if self.config.enable_prefix_caching and depth > 0:
                                         # Phase 1: Context Load
@@ -197,12 +257,20 @@ class BenchmarkRunner:
                                         expected_tokens = current_pp + current_depth
                                         batch_tasks = []
                                         for i in range(concurrency):
-                                            context, prompt = prompt_batch[i]
+                                            sample = prompt_batch[i]
+                                            if isinstance(sample, PromptSample):
+                                                context = sample.context_text
+                                                prompt = sample.prompt_text
+                                                messages = sample.messages
+                                                tools = sample.tools
+                                            else:
+                                                context, prompt = sample
+                                                messages = None
+                                                tools = None
                                             if not is_warmup:
                                                 rid = self._new_request_id()
                                                 self._emit_request_start(rid, pp, tg, depth, concurrency, measured_run_index)
-                                            batch_tasks.append(self.client.run_generation(
-                                                session,
+                                            generation_kwargs = dict(
                                                 context_text=context,
                                                 prompt_text=prompt,
                                                 max_tokens=tg,
@@ -210,6 +278,13 @@ class BenchmarkRunner:
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
                                                 request_id=None if is_warmup else rid,
+                                            )
+                                            if messages is not None:
+                                                generation_kwargs["messages"] = messages
+                                            if tools is not None:
+                                                generation_kwargs["tools"] = tools
+                                            batch_tasks.append(self.client.run_generation(
+                                                session, **generation_kwargs
                                             ))
 
                                         batch_results = await asyncio.gather(*batch_tasks)
@@ -230,7 +305,36 @@ class BenchmarkRunner:
                                             print(f"Post-run command failed: {e}")
 
                                 # Aggregate and Record
-                                if self.config.enable_prefix_caching and depth > 0:
+                                if isinstance(
+                                    self.prompt_gen,
+                                    HuggingFaceConversationPromptGenerator,
+                                ):
+                                    for row_index, batch in enumerate(run_std_results):
+                                        actual_pp = round(sum(
+                                            result.prompt_tokens for result in batch
+                                        ) / len(batch))
+                                        actual_tg = round(sum(
+                                            result.total_tokens for result in batch
+                                        ) / len(batch))
+                                        self.results.add(
+                                            self.config.model,
+                                            actual_pp,
+                                            actual_tg,
+                                            0,
+                                            concurrency,
+                                            [batch],
+                                            latency,
+                                            actual_pp,
+                                            is_context_phase=False,
+                                            save_total_throughput_timeseries=self.config.save_total_throughput_timeseries,
+                                            save_all_throughput_timeseries=self.config.save_all_throughput_timeseries,
+                                            prompt_id=(
+                                                f"{self.prompt_gen.instance_ids[row_index]}@"
+                                                f"{self.prompt_gen.trajectory_ids[row_index]}"
+                                            ),
+                                            use_observed_prompt_tokens=True,
+                                        )
+                                elif self.config.enable_prefix_caching and depth > 0:
                                     self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
                                     self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
                                 else:
@@ -238,15 +342,7 @@ class BenchmarkRunner:
                                     # In the loop above: expected_tokens = current_pp + current_depth
                                     self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
 
-                self.results.metadata = BenchmarkMetadata(
-                    version=__version__,
-                    timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
-                    latency_mode=self.config.latency_mode,
-                    latency_ms=latency * 1000,
-                    model=self.config.model,
-                    prefix_caching_enabled=self.config.enable_prefix_caching,
-                    max_concurrency=max(self.config.concurrency_levels) if self.config.concurrency_levels else 1
-                )
+                self.results.metadata = self._metadata(latency, max_concurrency)
 
             self.results.save_report(self.config.save_result, self.config.result_format, max(self.config.concurrency_levels) if self.config.concurrency_levels else 1)
 
@@ -260,15 +356,7 @@ class BenchmarkRunner:
                 if should_save:
                     print("\n[Interrupted/Failed] Saving partial results...")
                     if self.results.metadata is None:
-                        self.results.metadata = BenchmarkMetadata(
-                            version=__version__,
-                            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
-                            latency_mode=self.config.latency_mode,
-                            latency_ms=latency * 1000,
-                            model=self.config.model,
-                            prefix_caching_enabled=self.config.enable_prefix_caching,
-                            max_concurrency=max_concurrency
-                        )
+                        self.results.metadata = self._metadata(latency, max_concurrency)
                     self.results.save_report(self.config.save_result, self.config.result_format, max_concurrency)
             
             if isinstance(e, BenchmarkFailure):
