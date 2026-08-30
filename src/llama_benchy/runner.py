@@ -3,7 +3,7 @@ import subprocess
 import time
 import sys
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 import aiohttp
 
 from ._version import __version__
@@ -11,7 +11,7 @@ from .config import BenchmarkConfig
 from .client import CONTEXT_LOAD_USER_MESSAGE, LLMClient
 from .prompts import PromptGenerator
 from .results import BenchmarkResults, BenchmarkMetadata
-from .progress import ConsoleProgressBar
+from .progress import ConsoleProgressBar, compute_phase_weight
 
 class BenchmarkFailure(Exception):
     pass
@@ -53,19 +53,49 @@ class BenchmarkRunner:
         except Exception:
             pass
 
-    def _estimate_total_steps(self, warmup_runs: int) -> int:
-        total_steps = 0
-        for _depth in self.config.depths:
-            for _pp in self.config.pp_counts:
-                for _tg in self.config.tg_counts:
-                    for _concurrency in self.config.concurrency_levels:
-                        phase_count = 2 if self.config.enable_prefix_caching and _depth > 0 else 1
-                        total_steps += (self.config.num_runs + warmup_runs) * phase_count
-        return total_steps
+    def _estimate_total_weight(self, warmup_runs: int) -> float:
+        """Estimate the total work weight for the entire benchmark suite.
 
-    def _render_progress(self, current_step: int, description: str) -> None:
+        Each phase's weight is proportional to its estimated token-processing
+        cost (prompt tokens * prompt_cost + generation tokens * gen_cost).
+        This accounts for the fact that larger pp/depth/tg configurations
+        take proportionally longer, and generation is typically much slower
+        per token than prompt processing.
+
+        Concurrency does NOT multiply the weight: concurrent requests
+        execute in parallel via asyncio.gather, so wall-clock duration is
+        approximately the same as a single request.
+        """
+        total_weight = 0.0
+        for depth in self.config.depths:
+            for pp in self.config.pp_counts:
+                for tg in self.config.tg_counts:
+                    for _concurrency in self.config.concurrency_levels:
+                        phase_count = 2 if self.config.enable_prefix_caching and depth > 0 else 1
+                        for _ in range(self.config.num_runs + warmup_runs):
+                            if phase_count == 2:
+                                # Context Load phase: full context + probe
+                                total_weight += compute_phase_weight(
+                                    pp, tg, depth, is_context_load=True
+                                )
+                                # Inference phase: only pp tokens (context cached)
+                                total_weight += compute_phase_weight(
+                                    pp, tg, depth, is_inference=True
+                                )
+                            else:
+                                # Standard run: pp + depth tokens
+                                total_weight += compute_phase_weight(
+                                    pp, tg, depth
+                                )
+        return total_weight
+
+    def _render_progress(self, completed_weight: float, description: str, current_phase_weight: float = 0.0) -> None:
         if self.console_progress is not None:
-            self.console_progress.render(current_step, description=description)
+            self.console_progress.render(
+                completed_weight,
+                description=description,
+                current_phase_weight=current_phase_weight,
+            )
 
     async def run_suite(self):
         # Initialize session
@@ -73,6 +103,7 @@ class BenchmarkRunner:
         max_concurrency = max(self.config.concurrency_levels)
         connector = aiohttp.TCPConnector(limit=max_concurrency + 5, force_close=False, keepalive_timeout=600)
         latency = 0.0  # default in case of early interrupt
+        suite_start_time = time.perf_counter()
 
         try:
             async with aiohttp.ClientSession(timeout=timeout, connector=connector, trust_env=True) as session:
@@ -112,21 +143,28 @@ class BenchmarkRunner:
                 warmup_runs = 0 if self.config.no_warmup else self.config.warmup_runs
                 if self.config.progress_bar:
                     self.console_progress = ConsoleProgressBar(
-                        self._estimate_total_steps(warmup_runs),
+                        self._estimate_total_weight(warmup_runs),
                         enabled=True,
                     )
                     self.console_progress.start()
                 else:
                     self.console_progress = None
 
-                step_counter = 0
+                completed_weight = 0.0
+                current_phase_weight = 0.0
+                phase_start_time: Optional[float] = None
 
                 # Main Loop
                 for depth in self.config.depths:
                     for pp in self.config.pp_counts:
                         for tg in self.config.tg_counts:
                             for concurrency in self.config.concurrency_levels:
-                                print(f"Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}")
+                                # Ensure progress bar line is cleared before printing
+                                if self.console_progress is not None:
+                                    self.console_progress.stream.write("\n")
+                                    self.console_progress.stream.flush()
+                                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                print(f"[{ts}] Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}")
 
                                 run_std_results = []
                                 run_ctx_results = []
@@ -164,10 +202,14 @@ class BenchmarkRunner:
 
                                     if self.config.enable_prefix_caching and depth > 0:
                                         # Phase 1: Context Load
-                                        step_counter += 1
+                                        phase_start_time = time.perf_counter()
+                                        current_phase_weight = compute_phase_weight(
+                                            current_pp, tg, current_depth, is_context_load=True
+                                        )
                                         self._render_progress(
-                                            step_counter,
+                                            completed_weight,
                                             f"{run_label} (Context Load, batch size {concurrency})",
+                                            current_phase_weight=current_phase_weight,
                                         )
                                         load_tasks = []
                                         for i in range(concurrency):
@@ -187,6 +229,13 @@ class BenchmarkRunner:
                                             ))
 
                                         load_results = await asyncio.gather(*load_tasks)
+                                        if self.console_progress is not None and phase_start_time is not None:
+                                            if not is_warmup:
+                                                self.console_progress.record_phase_elapsed(
+                                                    time.perf_counter() - phase_start_time,
+                                                    phase_weight=current_phase_weight,
+                                                )
+                                            completed_weight += current_phase_weight
                                         if not is_warmup:
                                             run_ctx_results.append(load_results)
 
@@ -196,10 +245,14 @@ class BenchmarkRunner:
                                             raise BenchmarkFailure()
 
                                         # Phase 2: Inference
-                                        step_counter += 1
+                                        phase_start_time = time.perf_counter()
+                                        current_phase_weight = compute_phase_weight(
+                                            current_pp, tg, current_depth, is_inference=True
+                                        )
                                         self._render_progress(
-                                            step_counter,
+                                            completed_weight,
                                             f"{run_label} (Inference, batch size {concurrency})",
+                                            current_phase_weight=current_phase_weight,
                                         )
                                         inf_tasks = []
                                         for i in range(concurrency):
@@ -219,6 +272,13 @@ class BenchmarkRunner:
                                             ))
 
                                         batch_results = await asyncio.gather(*inf_tasks)
+                                        if self.console_progress is not None and phase_start_time is not None:
+                                            if not is_warmup:
+                                                self.console_progress.record_phase_elapsed(
+                                                    time.perf_counter() - phase_start_time,
+                                                    phase_weight=current_phase_weight,
+                                                )
+                                            completed_weight += current_phase_weight
                                         if not is_warmup:
                                             run_std_results.append(batch_results)
 
@@ -229,10 +289,14 @@ class BenchmarkRunner:
 
                                     else:
                                         # Standard Run
-                                        step_counter += 1
+                                        phase_start_time = time.perf_counter()
+                                        current_phase_weight = compute_phase_weight(
+                                            current_pp, tg, current_depth
+                                        )
                                         self._render_progress(
-                                            step_counter,
+                                            completed_weight,
                                             f"{run_label} (batch size {concurrency})",
+                                            current_phase_weight=current_phase_weight,
                                         )
                                         expected_tokens = current_pp + current_depth
                                         batch_tasks = []
@@ -253,6 +317,13 @@ class BenchmarkRunner:
                                             ))
 
                                         batch_results = await asyncio.gather(*batch_tasks)
+                                        if self.console_progress is not None and phase_start_time is not None:
+                                            if not is_warmup:
+                                                self.console_progress.record_phase_elapsed(
+                                                    time.perf_counter() - phase_start_time,
+                                                    phase_weight=current_phase_weight,
+                                                )
+                                            completed_weight += current_phase_weight
                                         if not is_warmup:
                                             run_std_results.append(batch_results)
 
@@ -290,6 +361,10 @@ class BenchmarkRunner:
 
             self.results.save_report(self.config.save_result, self.config.result_format, max(self.config.concurrency_levels) if self.config.concurrency_levels else 1)
 
+            # Print total benchmark time
+            total_elapsed = time.perf_counter() - suite_start_time
+            print(f"\nTotal benchmark time: {ConsoleProgressBar._format_duration(total_elapsed)}")
+
         except (asyncio.CancelledError, KeyboardInterrupt, BenchmarkFailure) as e:
             if self.results.runs:
                 should_save = True
@@ -310,10 +385,19 @@ class BenchmarkRunner:
                             max_concurrency=max_concurrency
                         )
                     self.results.save_report(self.config.save_result, self.config.result_format, max_concurrency)
+
+                    # Print total benchmark time even on interruption
+                    total_elapsed = time.perf_counter() - suite_start_time
+                    print(f"\nTotal benchmark time: {ConsoleProgressBar._format_duration(total_elapsed)}")
             
             if isinstance(e, BenchmarkFailure):
                 sys.exit(1)
             raise
         finally:
             if self.console_progress is not None:
+                # Render 100% completion before finishing
+                self.console_progress.render(
+                    self.console_progress.total_weight,
+                    description="Complete",
+                )
                 self.console_progress.finish()

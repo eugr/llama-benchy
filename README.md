@@ -34,6 +34,7 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 - Can save granular time-series data for token generation when JSON output is used (`--save-total-throughput-timeseries` and `--save-all-throughput-timeseries`).
 - Runs a coherence test after warmup to verify model responds correctly (default, can be skipped with `--skip-coherence`).
 - Auto-detects HuggingFace model name from the endpoint's `/models` endpoint when `--model` is not specified.
+- Shows a weighted progress bar with ETA during benchmark execution (`--progress-bar`).
 
 # Current Limitations
 
@@ -183,6 +184,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--exit-on-first-fail`: Stop execution on first failed test and exit with non-zero status.
 -   `--no-results-on-fail`: Prevent saving/printing any results when error is experienced, turns on --exit-on-first-fail as well.
 -   `--extra-body`: Extra JSON fields to merge into benchmark chat completion requests. Accepts repeated or comma-separated `key=value` / `key:value` entries, e.g. `--extra-body min_tokens=1024,ignore_eos=true`.
+-   `--progress-bar`: Show a weighted console progress bar with ETA during benchmark execution. Progress is weighted by estimated token-processing cost (prompt tokens × prompt cost + generation tokens × generation cost), so larger configurations contribute proportionally more progress. ETA is refined adaptively using actual phase timings.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
 

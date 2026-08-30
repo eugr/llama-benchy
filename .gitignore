@@ -78,3 +78,6 @@ coverage.xml
 examples/*.json
 
 graphify-out/
+
+# Benchmark results
+results.json
