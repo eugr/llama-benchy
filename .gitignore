@@ -76,3 +76,8 @@ coverage.xml
 *.swo
 *~
 examples/*.json
+
+graphify-out/
+
+# Benchmark results
+results.json
