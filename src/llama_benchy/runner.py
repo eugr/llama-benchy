@@ -152,6 +152,7 @@ class BenchmarkRunner:
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
                                                 request_id=None if is_warmup else rid,
+                                                strict_api=self.config.strict_api
                                             ))
 
                                         load_results = await asyncio.gather(*load_tasks)
@@ -180,6 +181,7 @@ class BenchmarkRunner:
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
                                                 request_id=None if is_warmup else rid,
+                                                strict_api=self.config.strict_api
                                             ))
 
                                         batch_results = await asyncio.gather(*inf_tasks)
@@ -210,6 +212,7 @@ class BenchmarkRunner:
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
                                                 request_id=None if is_warmup else rid,
+                                                strict_api=self.config.strict_api
                                             ))
 
                                         batch_results = await asyncio.gather(*batch_tasks)

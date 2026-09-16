@@ -47,7 +47,7 @@ class LLMClient:
         self.exact_tg = exact_tg
         self.headers = {"Authorization": f"Bearer {api_key}"}
 
-    def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool) -> Dict[str, Any]:
+    def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool, strict_api: Optional[bool] = False) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
@@ -56,6 +56,9 @@ class LLMClient:
             "return_token_ids": True,
             "stream_options": {"include_usage": True},
         }
+
+        if strict_api:
+            payload.pop("return_token_ids")
 
         if no_cache:
             payload["cache_prompt"] = False
@@ -311,6 +314,7 @@ class LLMClient:
             tokenizer=None,
             progress=None,
             request_id: Optional[int] = None,
+            strict_api: Optional[bool] = False
         ) -> RequestResult:
 
         messages = []
@@ -321,7 +325,7 @@ class LLMClient:
         result = RequestResult()
         
         try:
-            payload = self._build_generation_payload(messages, max_tokens, no_cache)
+            payload = self._build_generation_payload(messages, max_tokens, no_cache, strict_api)
             
             result.start_ts = time.perf_counter()
 
