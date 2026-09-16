@@ -80,6 +80,7 @@ class _FakeBenchmarkClient:
         tokenizer=None,
         progress=None,
         request_id=None,
+        strict_api=False
     ):
         self.generation_progress_flags.append(progress is not None)
         result = RequestResult(

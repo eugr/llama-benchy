@@ -82,6 +82,10 @@ class BenchmarkConfig(BaseModel):
         None,
         description="Emit progress events as JSONL to PATH (or '-' for stdout). See docs/progress-schema.md.",
     )
+    strict_api: Optional[bool] = Field(
+        default=False,
+        description="Enable compatibility with endpoints that do not allow return_token_ids to be set (like TensorRT LM). This will break MTP measurements.",
+    )
 
     @staticmethod
     def _parse_extra_body(values: Optional[List[str]]) -> Dict[str, Any]:
@@ -383,6 +387,11 @@ class BenchmarkConfig(BaseModel):
                 "consume this stream. Schema: docs/progress-schema.md."
             ),
         )
+        parser.add_argument(
+            "--strict-api",
+            action="store_true",
+            help="Enable compatibility with endpoints that do not allow return_token_ids to be set (like TensorRT LM). This will break MTP measurements.",
+        )
 
         args = parser.parse_args()
 
@@ -449,4 +458,5 @@ class BenchmarkConfig(BaseModel):
             no_results_on_fail=args.no_results_on_fail,
             extra_body=extra_body,
             emit_progress=args.emit_progress,
+            strict_api=args.strict_api,
         )
