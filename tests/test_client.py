@@ -110,6 +110,29 @@ def _content_event(content, token_ids=_MISSING):
     return {"choices": [choice]}
 
 
+def _role_event():
+    # What OpenAI-faithful servers (e.g. TensorFold) emit at stream open,
+    # before prefill has run: a choices chunk whose delta carries only the
+    # assistant role.
+    return {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+
+
+def _reasoning_event(reasoning):
+    return {"choices": [{"index": 0, "delta": {"reasoning_content": reasoning}, "finish_reason": None}]}
+
+
+def _tool_call_event():
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"index": 0, "id": "call_0", "function": {"name": "f"}}]},
+                "finish_reason": None,
+            }
+        ]
+    }
+
+
 def _usage_event(completion_tokens):
     return {
         "choices": [],
@@ -248,6 +271,75 @@ async def test_generation_latency_discards_warmup_probes(monkeypatch):
 
     assert latency == pytest.approx(2.0)
     assert len(session.requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_role_only_first_chunk_does_not_count_as_first_response(monkeypatch):
+    # Regression: an OpenAI-faithful server (e.g. TensorFold) emits a choices
+    # chunk with delta {"role": "assistant"} the instant the stream opens,
+    # before prefill has run. It must not set first_response_ts, or ttfr and
+    # est_ppt collapse to the socket round-trip and pp_throughput inflates by
+    # orders of magnitude (observed: 847,691 tok/s for a 2048-token prefill
+    # that actually took 2.7 s).
+    ticks = iter([0.0, 0.005, 1.2, 1.3, 1.4, 2.0, 2.1])
+    monkeypatch.setattr(client_module.time, "perf_counter", lambda: next(ticks))
+
+    result = await _run_stream([
+        _role_event(),
+        _content_event("Hel"),
+        _content_event("lo"),
+        _usage_event(2),
+        "[DONE]",
+    ])
+
+    assert result.first_response_ts == pytest.approx(1.2)
+    assert result.first_token_ts == pytest.approx(1.2)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_delta_counts_as_first_response(monkeypatch):
+    ticks = iter([0.0, 0.005, 0.9, 1.0, 2.0, 2.1])
+    monkeypatch.setattr(client_module.time, "perf_counter", lambda: next(ticks))
+
+    result = await _run_stream([
+        _role_event(),
+        _reasoning_event("Thinking"),
+        _tool_call_event(),
+        "[DONE]",
+    ])
+
+    assert result.first_response_ts == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_delta_counts_as_first_response(monkeypatch):
+    ticks = iter([0.0, 0.005, 0.8, 2.0, 2.1])
+    monkeypatch.setattr(client_module.time, "perf_counter", lambda: next(ticks))
+
+    result = await _run_stream([
+        _role_event(),
+        _tool_call_event(),
+        "[DONE]",
+    ])
+
+    assert result.first_response_ts == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_vllm_style_first_content_chunk_unaffected(monkeypatch):
+    # vLLM's first choices chunk already carries content: first_response_ts and
+    # first_token_ts land on the same chunk, as before this change.
+    ticks = iter([0.0, 1.5, 1.6, 2.0, 2.1])
+    monkeypatch.setattr(client_module.time, "perf_counter", lambda: next(ticks))
+
+    result = await _run_stream([
+        _content_event("Hel"),
+        _content_event("lo"),
+        "[DONE]",
+    ])
+
+    assert result.first_response_ts == pytest.approx(1.5)
+    assert result.first_token_ts == pytest.approx(1.5)
 
 
 @pytest.mark.asyncio

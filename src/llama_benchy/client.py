@@ -367,7 +367,26 @@ class LLMClient:
                                         usage_completion_tokens = completion_tokens
                                 
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
-                                    if result.first_response_ts is None:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    content = delta.get('content')
+                                    reasoning_content = delta.get('reasoning_content')
+                                    reasoning = delta.get('reasoning')
+
+                                    # A first chunk carrying only the assistant role (or an
+                                    # empty delta) is stream priming, not a response: the
+                                    # OpenAI-compatible servers that emit it eagerly (e.g.
+                                    # TensorFold) do so before prefill has run. Counting it
+                                    # as the first response collapses ttfr/est_ppt to the
+                                    # socket round-trip and inflates pp_throughput by orders
+                                    # of magnitude. The first response is the first chunk
+                                    # that carries generated payload: content, reasoning or
+                                    # tool calls.
+                                    has_payload = bool(
+                                        content or reasoning_content or reasoning
+                                        or delta.get('tool_calls')
+                                    )
+
+                                    if has_payload and result.first_response_ts is None:
                                         result.first_response_ts = chunk_time
                                         if progress is not None and request_id is not None:
                                             try:
@@ -377,11 +396,6 @@ class LLMClient:
                                                 )
                                             except Exception:
                                                 pass
-
-                                    delta = chunk['choices'][0].get('delta', {})
-                                    content = delta.get('content')
-                                    reasoning_content = delta.get('reasoning_content')
-                                    reasoning = delta.get('reasoning')
 
                                     if content or reasoning_content or reasoning:
                                         if result.first_token_ts is None:
