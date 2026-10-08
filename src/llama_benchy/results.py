@@ -42,6 +42,9 @@ class BenchmarkRun(BaseModel):
     ttfr: Optional[BenchmarkMetric] = Field(None, description="Time to First Response (ms)")
     est_ppt: Optional[BenchmarkMetric] = Field(None, description="Estimated pure processing time (ms)")
     e2e_ttft: Optional[BenchmarkMetric] = Field(None, description="End-to-end Time to First Token (ms)")
+    srv_pp: Optional[BenchmarkMetric] = Field(None, description="Server-reported prefill tok/s (a server timings object when the backend reports one)")
+    srv_tg: Optional[BenchmarkMetric] = Field(None, description="Server-reported decode tok/s (a server timings object when the backend reports one)")
+    srv_drafts: Optional[str] = Field(None, description="Server-reported drafts accepted/offered (speculative decoding counters when the backend reports them)")
     
     # List of time series, one per run (aggregated across all requests in that run)
     throughput_over_time: Optional[List[TimeSeries]] = Field(
@@ -201,6 +204,17 @@ class BenchmarkResults:
         run_metric_est_ppt = self._calculate_metric(agg_est_ppt_values, 1000)
         run_metric_e2e_ttft = self._calculate_metric(agg_e2e_ttft_values, 1000)
 
+        # Server-reported metrics, when the backend's response carries them
+        # (e.g. a `timings` object): a second, independent source next to the
+        # client clocks. Absent everywhere unless a backend reports them.
+        srv_pp_vals = [r.server_pp_tps for b in run_results for r in b if r.server_pp_tps]
+        srv_tg_vals = [r.server_tg_tps for b in run_results for r in b if r.server_tg_tps]
+        srv_acc = sum(r.server_drafts_accepted for b in run_results for r in b if r.server_drafts_accepted)
+        srv_off = sum(r.server_drafts_offered for b in run_results for r in b if r.server_drafts_offered)
+        run_metric_srv_pp = self._calculate_metric(srv_pp_vals)
+        run_metric_srv_tg = self._calculate_metric(srv_tg_vals)
+        run_srv_drafts = f"{srv_acc}/{srv_off}" if srv_off else None
+
         self.runs.append(BenchmarkRun(
             concurrency=concurrency,
             context_size=depth,
@@ -216,6 +230,9 @@ class BenchmarkResults:
             ttfr=run_metric_ttfr,
             est_ppt=run_metric_est_ppt,
             e2e_ttft=run_metric_e2e_ttft,
+            srv_pp=run_metric_srv_pp,
+            srv_tg=run_metric_srv_tg,
+            srv_drafts=run_srv_drafts,
             throughput_over_time=agg_throughput_series if save_total_throughput_timeseries else None,
             requests_throughput_over_time=agg_req_throughput_series if save_all_throughput_timeseries else None
         ))
@@ -382,7 +399,9 @@ class BenchmarkResults:
                         "peak_ts_req": None,
                         "ttfr": run.ttfr,
                         "est_ppt": run.est_ppt,
-                        "e2e_ttft": run.e2e_ttft
+                        "e2e_ttft": run.e2e_ttft,
+                        "srv_t_s": None,
+                        "srv_drafts": None
                     })
                 
                 # Context Phase Token Generation
@@ -396,7 +415,9 @@ class BenchmarkResults:
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "srv_t_s": None,
+                        "srv_drafts": None
                     })
             else:
                 # Standard Phase
@@ -413,7 +434,9 @@ class BenchmarkResults:
                         "peak_ts_req": None,
                         "ttfr": run.ttfr,
                         "est_ppt": run.est_ppt,
-                        "e2e_ttft": run.e2e_ttft
+                        "e2e_ttft": run.e2e_ttft,
+                        "srv_t_s": run.srv_pp,
+                        "srv_drafts": run.srv_drafts
                     })
                 
                 # Token Generation
@@ -427,7 +450,9 @@ class BenchmarkResults:
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "srv_t_s": run.srv_tg,
+                        "srv_drafts": run.srv_drafts
                     })
         return rows
 
@@ -441,34 +466,40 @@ class BenchmarkResults:
                 return ""
             return f"{metric.mean:.2f} ± {metric.std:.2f}"
             
+        def fmtd(metric) -> str:
+            return "" if metric is None else f"{metric.mean:.2f}"
         data = [[
-            row["model"], 
-            row["test_name"], 
-            fmt(row["t_s"]), 
-            fmt(row["t_s_req"]), 
+            row["model"],
+            row["test_name"],
+            fmt(row["t_s"]),
+            fmt(row["t_s_req"]),
             fmt(row["peak_ts"]),
             fmt(row["peak_ts_req"]),
-            fmt(row["ttfr"]), 
-            fmt(row["est_ppt"]), 
-            fmt(row["e2e_ttft"])
+            fmt(row["ttfr"]),
+            fmt(row["est_ppt"]),
+            fmt(row["e2e_ttft"]),
+            fmtd(row.get("srv_t_s")),
+            row.get("srv_drafts") or ""
         ] for row in rows]
 
         ts_header = "t/s (total)" if concurrency > 1 else "t/s"
-        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)", "srv t/s", "drafts"]
         
         if concurrency == 1:
             data = [[
-                row["model"], 
-                row["test_name"], 
+                row["model"],
+                row["test_name"],
                 fmt(row["t_s"]),
                 fmt(row["peak_ts"]),
-                fmt(row["ttfr"]), 
-                fmt(row["est_ppt"]), 
-                fmt(row["e2e_ttft"])
+                fmt(row["ttfr"]),
+                fmt(row["est_ppt"]),
+                fmt(row["e2e_ttft"]),
+                fmtd(row.get("srv_t_s")),
+                row.get("srv_drafts") or ""
             ] for row in rows]
-            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)", "srv t/s", "drafts"]
 
-        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right"))
+        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right", "right", "right"))
 
     def save_report(self, filename: Optional[str], format: str, concurrency: int = 1):
         msg = ""

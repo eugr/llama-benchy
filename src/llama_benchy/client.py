@@ -29,6 +29,10 @@ class RequestResult:
     prompt_tokens: int = 0
     total_tokens: int = 0
     error: Optional[str] = None
+    server_pp_tps: Optional[float] = None
+    server_tg_tps: Optional[float] = None
+    server_drafts_accepted: Optional[int] = None
+    server_drafts_offered: Optional[int] = None
     token_timestamps: List[float] = field(default_factory=list)
 
 class LLMClient:
@@ -356,6 +360,20 @@ class LLMClient:
                             try:
                                 json_str = line[5:].strip()
                                 chunk = json.loads(json_str)
+
+                                tm = chunk.get('timings')
+                                if isinstance(tm, dict):
+                                    try:
+                                        if tm.get('prompt_per_second') is not None:
+                                            result.server_pp_tps = float(tm['prompt_per_second'])
+                                        if tm.get('predicted_per_second') is not None:
+                                            result.server_tg_tps = float(tm['predicted_per_second'])
+                                        if tm.get('draft_n_accepted') is not None:
+                                            result.server_drafts_accepted = int(tm['draft_n_accepted'])
+                                        if tm.get('draft_n') is not None:
+                                            result.server_drafts_offered = int(tm['draft_n'])
+                                    except (TypeError, ValueError):
+                                        pass
 
                                 usage = chunk.get('usage')
                                 if isinstance(usage, dict):
