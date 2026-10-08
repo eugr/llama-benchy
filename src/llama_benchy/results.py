@@ -303,7 +303,14 @@ class BenchmarkResults:
                 first_token_times.append(res.first_token_ts)
                 e2e_ttft = res.first_token_ts - res.start_ts
                 ttft = max(0, e2e_ttft - latency)
-                est_ppt = max(0, ttfr - latency)
+                # Servers may stream keep-alive / progress chunks while still
+                # reading the prompt (Strata does). Those set first_response
+                # long before any token exists, so measuring the prompt against
+                # first response yields fantasy throughput (512 tokens / 3 ms).
+                # Measure against the first TOKEN, falling back to first
+                # response only when no token timestamp exists (identical on
+                # servers whose first response already is a token).
+                est_ppt = max(0, (e2e_ttft if e2e_ttft > 0 else ttfr) - latency)
 
                 agg_e2e_ttft_values.append(e2e_ttft)
                 agg_ttft_values.append(ttft)
