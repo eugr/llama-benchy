@@ -1,5 +1,8 @@
+import hashlib
 import sys
 import types
+
+import pytest
 
 from llama_benchy.corpus import LightweightTokenizer, TokenizedCorpus
 
@@ -139,3 +142,41 @@ def test_get_tokenizer_falls_back_to_lightweight_gpt2(monkeypatch):
     assert FakeAutoTokenizer.calls == [
         (("repo/model",), {"use_fast": True, "trust_remote_code": False})
     ]
+
+
+@pytest.mark.parametrize("text", ["", "A nonempty book."])
+def test_empty_tokenized_corpus_exits_with_actionable_error(monkeypatch, tmp_path, capsys, text):
+    book_url = "https://example.test/book.txt"
+    cache_dir = tmp_path / ".cache" / "llama-benchy"
+    cache_dir.mkdir(parents=True)
+    url_hash = hashlib.md5(book_url.encode()).hexdigest()
+    (cache_dir / f"{url_hash}.txt").write_text(text, encoding="utf-8")
+    monkeypatch.setattr("llama_benchy.corpus.os.path.expanduser", lambda path: str(tmp_path))
+    tokenizer = types.SimpleNamespace(encode=lambda *args, **kwargs: [])
+    monkeypatch.setattr(TokenizedCorpus, "_get_tokenizer", lambda *args: tokenizer)
+    monkeypatch.setattr(
+        "llama_benchy.corpus.requests.get",
+        lambda *args, **kwargs: pytest.fail("Cached corpus must not access the network"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        TokenizedCorpus(book_url, None, "repo/model")
+
+    assert error.value.code == 1
+    output = capsys.readouterr().out
+    assert "Tokenizer produced no tokens" in output
+    assert "--book-url" in output
+    assert "--tokenizer" in output
+
+
+def test_nonempty_tokenized_corpus_is_preserved(monkeypatch, tmp_path):
+    tokenizer = types.SimpleNamespace(encode=lambda *args, **kwargs: [1, 2, 3])
+    monkeypatch.setattr(TokenizedCorpus, "_get_tokenizer", lambda *args: tokenizer)
+    monkeypatch.setattr("llama_benchy.corpus.os.path.expanduser", lambda path: str(tmp_path))
+    response = types.SimpleNamespace(text="A book.", raise_for_status=lambda: None)
+    monkeypatch.setattr("llama_benchy.corpus.requests.get", lambda *args: response)
+
+    corpus = TokenizedCorpus("https://example.test/book.txt", None, "repo/model")
+
+    assert corpus.get_tokens() == [1, 2, 3]
+    assert len(corpus) == 3

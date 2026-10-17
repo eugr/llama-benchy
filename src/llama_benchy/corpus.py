@@ -97,7 +97,14 @@ class TokenizedCorpus:
                     f.write(text)
                 print(f"Saved text to cache: {cache_file}")
                 
-            return self.tokenizer.encode(text, add_special_tokens=False)
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+            if not tokens:
+                raise ValueError(
+                    "Tokenizer produced no tokens for the text corpus. "
+                    "Check --book-url and the cached text, or select a different "
+                    "tokenizer with --tokenizer."
+                )
+            return tokens
         except Exception as e:
             print(f"Error downloading or processing book: {e}")
             exit(1)
