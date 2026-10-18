@@ -20,6 +20,8 @@ class LightweightTokenizer:
                 tokenizer = Tokenizer.from_file(tokenizer_json)
             else:
                 tokenizer = Tokenizer.from_pretrained(name)
+        # Corpus tokenization must not inherit model-side sequence limits.
+        tokenizer.no_truncation()
         return cls(tokenizer)
 
     def encode(self, text: str, add_special_tokens: bool = False):

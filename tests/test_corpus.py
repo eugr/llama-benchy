@@ -1,6 +1,8 @@
 import sys
 import types
 
+import pytest
+
 from llama_benchy.corpus import LightweightTokenizer, TokenizedCorpus
 
 
@@ -13,6 +15,9 @@ class _FakeRawTokenizer:
     def __init__(self):
         self.encode_calls = []
         self.decode_calls = []
+
+    def no_truncation(self):
+        pass
 
     def encode(self, text, add_special_tokens=False):
         self.encode_calls.append((text, add_special_tokens))
@@ -139,3 +144,41 @@ def test_get_tokenizer_falls_back_to_lightweight_gpt2(monkeypatch):
     assert FakeAutoTokenizer.calls == [
         (("repo/model",), {"use_fast": True, "trust_remote_code": False})
     ]
+
+
+@pytest.mark.parametrize("source", ["file", "directory", "hub"])
+def test_lightweight_tokenizer_preserves_all_tokens_with_saved_truncation(
+    source, tmp_path, monkeypatch
+):
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+
+    raw = Tokenizer(
+        WordLevel(
+            {"[UNK]": 0, "one": 1, "two": 2, "three": 3, "four": 4},
+            unk_token="[UNK]",
+        )
+    )
+    raw.pre_tokenizer = Whitespace()
+    raw.enable_truncation(max_length=2)
+    text = "one two three four"
+    assert raw.encode(text, add_special_tokens=False).ids == [1, 2]
+
+    path = tmp_path / ("model.json" if source == "file" else "tokenizer.json")
+    raw.save(str(path))
+    name = str(path) if source == "file" else str(tmp_path)
+    if source == "hub":
+        class FakeTokenizer:
+            @staticmethod
+            def from_pretrained(name):
+                assert name == "repo/model"
+                return Tokenizer.from_file(str(path))
+
+        _install_tokenizers(monkeypatch, FakeTokenizer)
+        name = "repo/model"
+
+    tokenizer = LightweightTokenizer.from_pretrained(name)
+
+    assert tokenizer.encode(text, add_special_tokens=False) == [1, 2, 3, 4]
+    assert tokenizer.decode([1, 2, 3, 4]) == text
