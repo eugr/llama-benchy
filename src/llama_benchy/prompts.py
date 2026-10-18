@@ -35,7 +35,7 @@ class PromptGenerator:
         
         # Pick a random start position
         max_start = len(current_tokens) - total_needed
-        start_idx = np.random.randint(0, max_start)
+        start_idx = np.random.randint(0, max_start + 1)
         
         selected_tokens = current_tokens[start_idx : start_idx + total_needed]
         
