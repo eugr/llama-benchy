@@ -39,6 +39,13 @@ As of January 2nd, 2026, I wasn't able to find any existing benchmarking tool th
 
 - Evaluates against `/v1/chat/completions` endpoint only.
 
+## Related projects
+
+- [llamathon](https://github.com/qthullie/Llamathon) — an orchestrator around
+  llama-benchy that auto-detects available models, sizes `--pp`/`--tg` from a
+  real prompt using the model's own tokenizer, sweeps concurrency, and turns the
+  JSON output into charts and a self-contained HTML report.
+
 ## Installation
 
 Using `uv` is recommended. You can install `uv` here: https://docs.astral.sh/uv/getting-started/installation/
